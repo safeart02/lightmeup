@@ -3,6 +3,7 @@ package com.example.lightmeup
 import android.app.*
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
@@ -34,7 +35,6 @@ class LightmeupService : Service() {
         @Volatile var isRunning = false
             private set
 
-        // FIX #2: static instance for live settings updates
         @Volatile var instance: LightmeupService? = null
             private set
     }
@@ -93,9 +93,16 @@ class LightmeupService : Service() {
             return START_NOT_STICKY
         }
 
-        // Check WRITE_SETTINGS before doing anything with LEDs
-        if (!ledController.canWrite()) {
-            Log.e(TAG, "WRITE_SETTINGS not granted — LED control will fail!")
+        // WRITE_SECURE_SETTINGS is a signature/privileged permission — it can't be
+        // requested at runtime and has no canWrite() equivalent. Check if it was
+        // granted via ADB and warn if not; the controller handles failures gracefully.
+        val hasSecureWrite = checkSelfPermission(
+            "android.permission.WRITE_SECURE_SETTINGS"
+        ) == PackageManager.PERMISSION_GRANTED
+        if (!hasSecureWrite) {
+            Log.w(TAG, "WRITE_SECURE_SETTINGS not granted — LED control via " +
+                       "Settings.Secure will fail silently. Grant it with:\n" +
+                       "adb shell pm grant $packageName android.permission.WRITE_SECURE_SETTINGS")
         }
 
         startForeground(NOTIF_ID, buildNotification())
@@ -104,7 +111,6 @@ class LightmeupService : Service() {
         ledController.setBrightness(brightness)
         ledController.setEnabled(true)
 
-        // FIX #3: reset frame counter on fresh start
         frameCounter    = 0
         framesProcessed = 0
         framesDropped   = 0
@@ -202,7 +208,6 @@ class LightmeupService : Service() {
 
             framesProcessed++
 
-            // Log a heartbeat every 100 processed frames
             if (framesProcessed % 100 == 0) {
                 Log.d(TAG, "Heartbeat: processed=$framesProcessed " +
                            "dropped=$framesDropped total=$frameCounter")
