@@ -1,0 +1,256 @@
+package com.example.lightmeup
+
+import android.app.*
+import android.content.Context
+import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.PixelFormat
+import android.hardware.display.DisplayManager
+import android.hardware.display.VirtualDisplay
+import android.media.ImageReader
+import android.media.projection.MediaProjection
+import android.media.projection.MediaProjectionManager
+import android.os.*
+import android.util.Log
+import androidx.core.app.NotificationCompat
+
+class LightmeupService : Service() {
+
+    companion object {
+        private const val TAG      = "LightmeupService"
+        private const val NOTIF_ID = 1001
+        private const val CHANNEL_ID = "lightmeup_channel"
+
+        private const val CAPTURE_W = 320
+        private const val CAPTURE_H = 180
+
+        const val EXTRA_RESULT_CODE = "result_code"
+        const val EXTRA_DATA        = "data"
+        const val EXTRA_BRIGHTNESS  = "brightness"
+        const val EXTRA_FRAME_SKIP  = "frame_skip"
+        const val EXTRA_SMOOTHING   = "smoothing"
+        const val EXTRA_ZONE_WIDTH  = "zone_width"
+
+        @Volatile var isRunning = false
+            private set
+
+        // FIX #2: static instance for live settings updates
+        @Volatile var instance: LightmeupService? = null
+            private set
+    }
+
+    @Volatile private var brightness = 0.6f
+    @Volatile private var frameSkip  = 1
+    @Volatile private var smoothing  = 0.35f
+    @Volatile private var zoneWidth  = 0.15f
+
+    private var frameCounter    = 0
+    private var framesProcessed = 0
+    private var framesDropped   = 0
+
+    private lateinit var projectionManager: MediaProjectionManager
+    private var mediaProjection: MediaProjection? = null
+    private var virtualDisplay: VirtualDisplay?   = null
+    private var imageReader: ImageReader?         = null
+    private val handler = Handler(Looper.getMainLooper())
+
+    private lateinit var ledController: RetroidLEDController
+
+    // ── Lifecycle ──────────────────────────────────────────────────────────
+
+    override fun onCreate() {
+        super.onCreate()
+        instance = this
+        projectionManager = getSystemService(MEDIA_PROJECTION_SERVICE)
+            as MediaProjectionManager
+        ledController = RetroidLEDController(applicationContext)
+        createNotificationChannel()
+        Log.i(TAG, "onCreate — service created")
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        Log.i(TAG, "onStartCommand called")
+
+        if (intent == null) {
+            Log.e(TAG, "onStartCommand: null intent — stopping")
+            return START_NOT_STICKY
+        }
+
+        brightness = intent.getFloatExtra(EXTRA_BRIGHTNESS, 0.6f)
+        frameSkip  = intent.getIntExtra(EXTRA_FRAME_SKIP, 1)
+        smoothing  = intent.getFloatExtra(EXTRA_SMOOTHING, 0.35f)
+        zoneWidth  = intent.getFloatExtra(EXTRA_ZONE_WIDTH, 0.15f)
+
+        Log.d(TAG, "Settings: brightness=$brightness, frameSkip=$frameSkip, " +
+                   "smoothing=$smoothing, zoneWidth=$zoneWidth")
+
+        val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, Activity.RESULT_CANCELED)
+        val data       = intent.getParcelableExtra<Intent>(EXTRA_DATA)
+
+        if (data == null) {
+            Log.e(TAG, "No MediaProjection data in intent — stopping self")
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
+        // Check WRITE_SETTINGS before doing anything with LEDs
+        if (!ledController.canWrite()) {
+            Log.e(TAG, "WRITE_SETTINGS not granted — LED control will fail!")
+        }
+
+        startForeground(NOTIF_ID, buildNotification())
+        Log.i(TAG, "Foreground service started")
+
+        ledController.setBrightness(brightness)
+        ledController.setEnabled(true)
+
+        // FIX #3: reset frame counter on fresh start
+        frameCounter    = 0
+        framesProcessed = 0
+        framesDropped   = 0
+        ColorSampler.reset()
+
+        startCapture(resultCode, data)
+        isRunning = true
+        Log.i(TAG, "Service is now running")
+
+        return START_STICKY
+    }
+
+    override fun onDestroy() {
+        Log.i(TAG, "onDestroy — processed=$framesProcessed dropped=$framesDropped")
+        stopCapture()
+        ledController.restore()
+        isRunning = false
+        instance  = null
+        super.onDestroy()
+    }
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    // ── Live settings update ───────────────────────────────────────────────
+
+    fun updateSettings(b: Float, fs: Int, sm: Float, zw: Float) {
+        Log.d(TAG, "updateSettings: brightness=$b, frameSkip=$fs, " +
+                   "smoothing=$sm, zoneWidth=$zw")
+        brightness = b
+        frameSkip  = fs
+        smoothing  = sm
+        zoneWidth  = zw
+        ledController.setBrightness(b)
+    }
+
+    // ── Capture ────────────────────────────────────────────────────────────
+
+    private fun startCapture(resultCode: Int, data: Intent) {
+        Log.i(TAG, "startCapture: creating MediaProjection")
+        mediaProjection = projectionManager.getMediaProjection(resultCode, data)
+
+        if (mediaProjection == null) {
+            Log.e(TAG, "getMediaProjection returned null!")
+            stopSelf()
+            return
+        }
+
+        imageReader = ImageReader.newInstance(
+            CAPTURE_W, CAPTURE_H, PixelFormat.RGBA_8888, 2
+        )
+        imageReader!!.setOnImageAvailableListener({ reader ->
+            onFrameAvailable(reader)
+        }, handler)
+
+        val density = resources.displayMetrics.densityDpi
+        virtualDisplay = mediaProjection!!.createVirtualDisplay(
+            "LightMeUpCapture",
+            CAPTURE_W, CAPTURE_H, density,
+            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+            imageReader!!.surface, null, null
+        )
+
+        Log.i(TAG, "VirtualDisplay created: ${CAPTURE_W}x${CAPTURE_H} @ ${density}dpi")
+    }
+
+    private fun onFrameAvailable(reader: ImageReader) {
+        frameCounter++
+
+        if (frameCounter % (frameSkip + 1) != 0) {
+            reader.acquireLatestImage()?.close()
+            framesDropped++
+            return
+        }
+
+        val image = reader.acquireLatestImage()
+        if (image == null) {
+            Log.w(TAG, "acquireLatestImage returned null (frame $frameCounter)")
+            return
+        }
+
+        try {
+            val plane  = image.planes[0]
+            val buffer = plane.buffer
+            val pw     = plane.rowStride / plane.pixelStride
+
+            val bitmap = Bitmap.createBitmap(pw, image.height, Bitmap.Config.ARGB_8888)
+            bitmap.copyPixelsFromBuffer(buffer)
+
+            val cropped = if (pw != CAPTURE_W)
+                Bitmap.createBitmap(bitmap, 0, 0, CAPTURE_W, CAPTURE_H)
+            else bitmap
+
+            val (leftColor, rightColor) = ColorSampler.sample(cropped, zoneWidth, smoothing)
+            ledController.setZoneColors(leftColor, rightColor)
+
+            framesProcessed++
+
+            // Log a heartbeat every 100 processed frames
+            if (framesProcessed % 100 == 0) {
+                Log.d(TAG, "Heartbeat: processed=$framesProcessed " +
+                           "dropped=$framesDropped total=$frameCounter")
+            }
+
+            if (cropped !== bitmap) cropped.recycle()
+            bitmap.recycle()
+
+        } catch (e: Exception) {
+            Log.e(TAG, "Frame processing error at frame $frameCounter: ${e.message}", e)
+        } finally {
+            image.close()
+        }
+    }
+
+    private fun stopCapture() {
+        Log.i(TAG, "stopCapture")
+        virtualDisplay?.release()
+        imageReader?.close()
+        mediaProjection?.stop()
+        virtualDisplay  = null
+        imageReader     = null
+        mediaProjection = null
+    }
+
+    // ── Notification ───────────────────────────────────────────────────────
+
+    private fun createNotificationChannel() {
+        val channel = NotificationChannel(
+            CHANNEL_ID, "LightMeUp Service",
+            NotificationManager.IMPORTANCE_LOW
+        ).apply { description = "LED sync running" }
+        getSystemService(NotificationManager::class.java)
+            .createNotificationChannel(channel)
+    }
+
+    private fun buildNotification(): Notification {
+        val openApp = PendingIntent.getActivity(
+            this, 0,
+            Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_IMMUTABLE
+        )
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("LightMeUp")
+            .setContentText("LED sync active")
+            .setSmallIcon(android.R.drawable.ic_menu_compass)
+            .setContentIntent(openApp)
+            .setOngoing(true)
+            .build()
+    }
+}
