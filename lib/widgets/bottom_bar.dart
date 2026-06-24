@@ -4,9 +4,18 @@ import '../screens/home_screen.dart';
 // ── Bottom hint bar ───────────────────────────────────────────────────────────
 
 class BottomBar extends StatelessWidget {
-  const BottomBar({super.key, required this.isRunning, required this.level});
+  const BottomBar({
+    super.key,
+    required this.isRunning,
+    required this.level,
+    this.panelOpen = false,
+  });
+
   final bool isRunning;
   final FocusLevel level;
+
+  /// True when either quick panel is open — switches hints to panel context.
+  final bool panelOpen;
 
   @override
   Widget build(BuildContext context) {
@@ -21,32 +30,43 @@ class BottomBar extends StatelessWidget {
         children: [
           AnimatedSwitcher(
             duration: const Duration(milliseconds: 150),
-            child: switch (level) {
-              FocusLevel.nav => _HintRow(
-                key: const ValueKey('nav'),
-                hints: const [
-                  _HintData('↑↓', 'Choose section'),
-                  _HintData('A / ►', 'Enter'),
-                  _HintData('Y', 'Toggle service'),
-                ],
-              ),
-              FocusLevel.section => _HintRow(
-                key: const ValueKey('section'),
-                hints: const [
-                  _HintData('↑↓', 'Choose setting'),
-                  _HintData('A', 'Adjust'),
-                  _HintData('B / ◄', 'Back'),
-                ],
-              ),
-              FocusLevel.slider => _HintRow(
-                key: const ValueKey('slider'),
-                hints: const [
-                  _HintData('◄►', 'Change value'),
-                  _HintData('A / B', 'Confirm'),
-                  _HintData('Y', 'Toggle service'),
-                ],
-              ),
-            },
+            child: panelOpen
+                // ── Panel-open hints ───────────────────────────────────────
+                ? _HintRow(
+                    key: const ValueKey('panel'),
+                    hints: const [
+                      _HintData('↑↓', 'Select'),
+                      _HintData('A', 'Adjust'),
+                      _HintData('B', 'Close panel'),
+                    ],
+                  )
+                // ── Normal hints ───────────────────────────────────────────
+                : switch (level) {
+                    FocusLevel.nav => _HintRow(
+                      key: const ValueKey('nav'),
+                      hints: const [
+                        _HintData('↑↓', 'Choose section'),
+                        _HintData('A / ►', 'Enter'),
+                        _HintData('Y', 'Toggle service'),
+                      ],
+                    ),
+                    FocusLevel.section => _HintRow(
+                      key: const ValueKey('section'),
+                      hints: const [
+                        _HintData('↑↓', 'Choose setting'),
+                        _HintData('A', 'Adjust'),
+                        _HintData('B / ◄', 'Back'),
+                      ],
+                    ),
+                    FocusLevel.slider => _HintRow(
+                      key: const ValueKey('slider'),
+                      hints: const [
+                        _HintData('◄►', 'Change value'),
+                        _HintData('A / B', 'Confirm'),
+                        _HintData('Y', 'Toggle service'),
+                      ],
+                    ),
+                  },
           ),
           const Spacer(),
           Container(width: 1, height: 14, color: ConsoleColors.border2),
@@ -106,9 +126,7 @@ class _Hint extends StatelessWidget {
       children: [
         Container(
           height: 18,
-          padding: const EdgeInsets.symmetric(
-            horizontal: 5,
-          ), // ← padding instead of fixed width
+          padding: const EdgeInsets.symmetric(horizontal: 5),
           decoration: BoxDecoration(
             border: Border.all(color: ConsoleColors.border2),
             borderRadius: BorderRadius.circular(3),
@@ -136,7 +154,6 @@ class _Hint extends StatelessWidget {
 
 // ── Section scaffold ──────────────────────────────────────────────────────────
 
-/// Consistent header + scrollable body for every section.
 class SectionScaffold extends StatelessWidget {
   const SectionScaffold({
     super.key,
@@ -154,7 +171,6 @@ class SectionScaffold extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // Content header
         Container(
           padding: const EdgeInsets.fromLTRB(20, 14, 20, 10),
           decoration: const BoxDecoration(
@@ -236,44 +252,33 @@ class SettingGroup extends StatelessWidget {
 
 // ── Slider controller ─────────────────────────────────────────────────────────
 
-/// Passed from a section down to [ConsoleSlider] via [SettingRow].
-/// Lets [_HomeScreenState] nudge the slider without coupling to its internals.
 class SliderController {
-  _ConsoleSliderState? _state;
+  ConsoleSliderState? _state;
 
-  void _attach(_ConsoleSliderState s) => _state = s;
-  void _detach(_ConsoleSliderState s) {
+  void attach(ConsoleSliderState s) => _state = s;
+  void detach(ConsoleSliderState s) {
     if (_state == s) _state = null;
   }
 
-  /// Move the slider by one step in [direction] (+1 right, -1 left).
-  /// Clamped at min/max — never wraps.
   void nudge(int direction) => _state?._nudge(direction);
 }
 
 // ── Setting row ───────────────────────────────────────────────────────────────
 
-/// A full-width row with name + description on the left, control on the right.
-/// [highlighted] is driven externally (from HomeScreen) to show selection.
-/// [active] means it is currently selected and ◄► will adjust its slider.
 class SettingRow extends StatelessWidget {
   const SettingRow({
     super.key,
     required this.name,
     required this.description,
     required this.control,
-    this.highlighted = false,
-    this.active = false,
+    required this.highlighted,
+    required this.active,
   });
 
   final String name;
   final String description;
   final Widget control;
-
-  /// Cursor is on this row (A not yet pressed).
   final bool highlighted;
-
-  /// Row is selected and ◄► adjusts the slider.
   final bool active;
 
   @override
@@ -335,10 +340,6 @@ class SettingRow extends StatelessWidget {
 
 // ── Console slider ────────────────────────────────────────────────────────────
 
-/// Slim 2px track with diamond thumb and monospace value readout.
-/// Holds its own local value so the thumb tracks instantly without waiting
-/// for a Provider rebuild on every drag frame.
-/// Accepts an optional [controller] for gamepad nudge support.
 class ConsoleSlider extends StatefulWidget {
   const ConsoleSlider({
     super.key,
@@ -360,25 +361,25 @@ class ConsoleSlider extends StatefulWidget {
   final SliderController? controller;
 
   @override
-  State<ConsoleSlider> createState() => _ConsoleSliderState();
+  State<ConsoleSlider> createState() => ConsoleSliderState();
 }
 
-class _ConsoleSliderState extends State<ConsoleSlider> {
+class ConsoleSliderState extends State<ConsoleSlider> {
   late double _local;
 
   @override
   void initState() {
     super.initState();
     _local = widget.value.clamp(widget.min, widget.max);
-    widget.controller?._attach(this);
+    widget.controller?.attach(this);
   }
 
   @override
   void didUpdateWidget(ConsoleSlider old) {
     super.didUpdateWidget(old);
     if (old.controller != widget.controller) {
-      old.controller?._detach(this);
-      widget.controller?._attach(this);
+      old.controller?.detach(this);
+      widget.controller?.attach(this);
     }
     if (old.value != widget.value) {
       _local = widget.value.clamp(widget.min, widget.max);
@@ -387,12 +388,10 @@ class _ConsoleSliderState extends State<ConsoleSlider> {
 
   @override
   void dispose() {
-    widget.controller?._detach(this);
+    widget.controller?.detach(this);
     super.dispose();
   }
 
-  /// Called by [SliderController.nudge] from the key handler.
-  /// Moves exactly one division step, clamped to [min..max].
   void _nudge(int direction) {
     final divisions = widget.divisions ?? 20;
     final step = (widget.max - widget.min) / divisions;

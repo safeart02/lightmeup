@@ -15,6 +15,7 @@ import android.media.projection.MediaProjectionManager
 import android.os.*
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import io.flutter.plugin.common.EventChannel
 
 class LightmeupService : Service() {
 
@@ -38,6 +39,14 @@ class LightmeupService : Service() {
 
         @Volatile var instance: LightmeupService? = null
             private set
+
+        // ── EventChannel sink — set by MainActivity, nulled on stop ───────
+        // Volatile so the capture HandlerThread sees writes from the main thread.
+        @Volatile var colorSink: EventChannel.EventSink? = null
+
+        // Throttle: only push a colour event every ~66 ms (~15 fps).
+        private const val COLOR_PUSH_INTERVAL_MS = 66L
+        @Volatile private var lastPushMs = 0L
     }
 
     @Volatile private var brightness = 0.6f
@@ -52,6 +61,9 @@ class LightmeupService : Service() {
 
     private var smoothedLeft  = Color.BLACK
     private var smoothedRight = Color.BLACK
+
+    // Main-thread handler — used to post EventSink calls safely.
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     private lateinit var projectionManager: MediaProjectionManager
     private var mediaProjection: MediaProjection? = null
@@ -99,16 +111,12 @@ class LightmeupService : Service() {
             return START_NOT_STICKY
         }
 
-        // WRITE_SECURE_SETTINGS is a signature/privileged permission — it can't be
-        // requested at runtime and has no canWrite() equivalent. Check if it was
-        // granted via ADB and warn if not; the controller handles failures gracefully.
         val hasSecureWrite = checkSelfPermission(
             "android.permission.WRITE_SECURE_SETTINGS"
         ) == PackageManager.PERMISSION_GRANTED
         if (!hasSecureWrite) {
             Log.w(TAG, "WRITE_SECURE_SETTINGS not granted — LED control via " +
-                       "Settings.Secure will fail silently. Grant it with:\n" +
-                       "adb shell pm grant $packageName android.permission.WRITE_SECURE_SETTINGS")
+                       "Settings.Secure will fail silently.")
         }
 
         startForeground(NOTIF_ID, buildNotification())
@@ -120,6 +128,7 @@ class LightmeupService : Service() {
         frameCounter    = 0
         framesProcessed = 0
         framesDropped   = 0
+        lastPushMs      = 0L
         ColorSampler.reset()
 
         startCapture(resultCode, data)
@@ -133,6 +142,9 @@ class LightmeupService : Service() {
         Log.i(TAG, "onDestroy — processed=$framesProcessed dropped=$framesDropped")
         stopCapture()
         ledController.restore()
+        // Push black to the panel before disconnecting so it doesn't freeze
+        // on the last colour when the service stops.
+        pushColors(Color.BLACK, Color.BLACK)
         isRunning = false
         instance  = null
         super.onDestroy()
@@ -216,8 +228,7 @@ class LightmeupService : Service() {
 
             val (leftColor, rightColor) = ColorSampler.sample(cropped, zoneWidth, smoothing = 0f)
 
-            // Fast temporal smoothing — average over ~4 frames, no perceptible lag
-            val alpha = 0.25f  // higher = faster reaction, lower = smoother
+            val alpha = 0.25f
             smoothedLeft  = lerpColor(smoothedLeft,  leftColor,  alpha)
             smoothedRight = lerpColor(smoothedRight, rightColor, alpha)
 
@@ -225,13 +236,26 @@ class LightmeupService : Service() {
             val rightLuma = Color.red(smoothedRight) * 0.299 + Color.green(smoothedRight) * 0.587 + Color.blue(smoothedRight) * 0.114
             val avgLuma   = (leftLuma + rightLuma) / 2.0
 
+            val finalLeft: Int
+            val finalRight: Int
+
             if (avgLuma < 8.0) {
+                finalLeft  = Color.BLACK
+                finalRight = Color.BLACK
                 ledController.setZoneColors(Color.BLACK, Color.BLACK)
             } else {
-                val boostedLeft  = ledController.boostSaturation(smoothedLeft,  brightness = brightness)
-                val boostedRight = ledController.boostSaturation(smoothedRight, brightness = brightness)
-                ledController.setZoneColors(boostedLeft, boostedRight)
+                finalLeft  = ledController.boostSaturation(smoothedLeft,  brightness = brightness)
+                finalRight = ledController.boostSaturation(smoothedRight, brightness = brightness)
+                ledController.setZoneColors(finalLeft, finalRight)
             }
+
+            // ── Push to Flutter panel (throttled to ~15 fps) ───────────────
+            val now = SystemClock.elapsedRealtime()
+            if (now - lastPushMs >= COLOR_PUSH_INTERVAL_MS) {
+                lastPushMs = now
+                pushColors(finalLeft, finalRight)
+            }
+
             framesProcessed++
 
             if (framesProcessed % 100 == 0) {
@@ -246,6 +270,21 @@ class LightmeupService : Service() {
             Log.e(TAG, "Frame processing error at frame $frameCounter: ${e.message}", e)
         } finally {
             image.close()
+        }
+    }
+
+    // ── EventChannel push ──────────────────────────────────────────────────
+
+    /// Pushes left/right colours to Flutter. Always called on the main thread
+    /// because EventSink is not thread-safe.
+    private fun pushColors(left: Int, right: Int) {
+        val sink = colorSink ?: return
+        // Convert Android Color int (0xAARRGGBB) to Flutter Color int (0xAARRGGBB) — same format.
+        // Ensure full alpha so Flutter's Color() constructor renders it opaque.
+        val flutterLeft  = (left  and 0x00FFFFFF) or 0xFF000000.toInt()
+        val flutterRight = (right and 0x00FFFFFF) or 0xFF000000.toInt()
+        mainHandler.post {
+            sink.success(mapOf("left" to flutterLeft, "right" to flutterRight))
         }
     }
 

@@ -5,12 +5,14 @@ import '../services/app_state.dart';
 import '../widgets/side_nav.dart';
 import '../widgets/top_bar.dart';
 import '../widgets/bottom_bar.dart';
+import '../widgets/quick_panel.dart';
 import '../sections/output_section.dart';
 import '../sections/capture_section.dart';
 import '../sections/performance_section.dart';
 import '../sections/about_section.dart';
+import '../sections/control_section.dart';
 
-enum NavSection { output, capture, performance, about }
+enum NavSection { output, capture, performance, controls, about }
 
 /// Three-level focus model — mirrors standard console menu UX:
 ///
@@ -29,9 +31,19 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   FocusLevel _level = FocusLevel.nav;
   NavSection _section = NavSection.output;
-  int _cursorRow = 0; // row index within the current section
+  int _cursorRow = 0;
 
-  // ── Slider controllers ────────────────────────────────────────────────────
+  // ── Quick panel controllers ────────────────────────────────────────────
+  final _leftPanelCtrl = QuickPanelController();
+  final _rightPanelCtrl = QuickPanelController();
+
+  // ── Swipe detection ────────────────────────────────────────────────────
+  // Width of the invisible edge hit zone in logical pixels.
+  static const _swipeZoneWidth = 24.0;
+  // Minimum horizontal drag velocity to count as a swipe.
+  static const _swipeVelocityThreshold = 300.0;
+
+  // ── Slider controllers ─────────────────────────────────────────────────
   final _brightnessCtrl = SliderController();
   final _smoothingCtrl = SliderController();
   final _zoneWidthCtrl = SliderController();
@@ -41,6 +53,7 @@ class _HomeScreenState extends State<HomeScreen> {
     NavSection.output: 2,
     NavSection.capture: 1,
     NavSection.performance: 1,
+    NavSection.controls: 0,
     NavSection.about: 0,
   };
 
@@ -54,12 +67,15 @@ class _HomeScreenState extends State<HomeScreen> {
         return [_zoneWidthCtrl];
       case NavSection.performance:
         return [_frameSkipCtrl];
+      case NavSection.controls:
       case NavSection.about:
         return [];
     }
   }
 
-  // ── Build ─────────────────────────────────────────────────────────────────
+  bool get _eitherPanelOpen => _leftPanelCtrl.isOpen || _rightPanelCtrl.isOpen;
+
+  // ── Build ──────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -79,49 +95,103 @@ class _HomeScreenState extends State<HomeScreen> {
       body: Focus(
         autofocus: true,
         onKeyEvent: (_, event) => _handleKey(event, state),
-        child: Column(
+        child: Stack(
           children: [
-            TopBar(
-              isRunning: state.isRunning,
-              onToggle: () => context.read<AppState>().toggleService(),
-            ),
-            Expanded(
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  SideNav(
-                    selected: _section,
-                    isRunning: state.isRunning,
-                    navFocused: _level == FocusLevel.nav,
-                    onSelect: (s) => setState(() {
-                      _section = s;
-                      _level = FocusLevel.nav;
-                      _cursorRow = 0;
-                    }),
-                    onToggle: () => context.read<AppState>().toggleService(),
-                  ),
-                  Expanded(
-                    child: AnimatedSwitcher(
-                      duration: const Duration(milliseconds: 180),
-                      switchInCurve: Curves.easeOut,
-                      switchOutCurve: Curves.easeIn,
-                      transitionBuilder: (child, anim) => FadeTransition(
-                        opacity: anim,
-                        child: SlideTransition(
-                          position: Tween<Offset>(
-                            begin: const Offset(0.02, 0),
-                            end: Offset.zero,
-                          ).animate(anim),
-                          child: child,
+            // ── Main UI ─────────────────────────────────────────────────
+            Column(
+              children: [
+                TopBar(
+                  isRunning: state.isRunning,
+                  onToggle: () => context.read<AppState>().toggleService(),
+                ),
+                Expanded(
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      SideNav(
+                        selected: _section,
+                        isRunning: state.isRunning,
+                        navFocused: _level == FocusLevel.nav,
+                        onSelect: (s) => setState(() {
+                          _section = s;
+                          _level = FocusLevel.nav;
+                          _cursorRow = 0;
+                        }),
+                        onToggle: () =>
+                            context.read<AppState>().toggleService(),
+                      ),
+                      Expanded(
+                        child: AnimatedSwitcher(
+                          duration: const Duration(milliseconds: 180),
+                          switchInCurve: Curves.easeOut,
+                          switchOutCurve: Curves.easeIn,
+                          transitionBuilder: (child, anim) => FadeTransition(
+                            opacity: anim,
+                            child: SlideTransition(
+                              position: Tween<Offset>(
+                                begin: const Offset(0.02, 0),
+                                end: Offset.zero,
+                              ).animate(anim),
+                              child: child,
+                            ),
+                          ),
+                          child: _buildSection(state),
                         ),
                       ),
-                      child: _buildSection(state),
-                    ),
+                    ],
                   ),
-                ],
+                ),
+                BottomBar(
+                  isRunning: state.isRunning,
+                  level: _level,
+                  panelOpen: _eitherPanelOpen,
+                ),
+              ],
+            ),
+
+            // ── Left swipe zone (invisible) ──────────────────────────────
+            Positioned(
+              left: 0,
+              top: 0,
+              bottom: 0,
+              width: _swipeZoneWidth,
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onHorizontalDragEnd: (details) {
+                  final v = details.primaryVelocity ?? 0;
+                  // Swipe right from left edge → open left panel
+                  if (v > _swipeVelocityThreshold && !_eitherPanelOpen) {
+                    _leftPanelCtrl.open();
+                    setState(() {});
+                  }
+                },
               ),
             ),
-            BottomBar(isRunning: state.isRunning, level: _level),
+
+            // ── Right swipe zone (invisible) ─────────────────────────────
+            Positioned(
+              right: 0,
+              top: 0,
+              bottom: 0,
+              width: _swipeZoneWidth,
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onHorizontalDragEnd: (details) {
+                  final v = details.primaryVelocity ?? 0;
+                  // Swipe left from right edge → open right panel
+                  if (v < -_swipeVelocityThreshold && !_eitherPanelOpen) {
+                    _rightPanelCtrl.open();
+                    setState(() {});
+                  }
+                },
+              ),
+            ),
+
+            // ── Left quick panel ─────────────────────────────────────────
+            QuickPanel(controller: _leftPanelCtrl, side: PanelSide.left),
+
+            // ── Right quick panel ────────────────────────────────────────
+            QuickPanel(controller: _rightPanelCtrl, side: PanelSide.right),
           ],
         ),
       ),
@@ -129,7 +199,6 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildSection(AppState state) {
-    // cursorRow and activeRow are only meaningful at level 1 / 2.
     final cursor = _level != FocusLevel.nav ? _cursorRow : -1;
     final active = _level == FocusLevel.slider ? _cursorRow : -1;
 
@@ -159,20 +228,58 @@ class _HomeScreenState extends State<HomeScreen> {
           activeRow: active,
           frameSkipCtrl: _frameSkipCtrl,
         );
+      case NavSection.controls:
+        return ControlsSection(key: const ValueKey('controls'), state: state);
       case NavSection.about:
         return AboutSection(key: const ValueKey('about'), state: state);
     }
   }
 
-  // ── Key handler ───────────────────────────────────────────────────────────
+  // ── Key handler ────────────────────────────────────────────────────────
 
   KeyEventResult _handleKey(KeyEvent event, AppState state) {
-    // Handle both press and repeat so held ◄► keeps nudging.
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
       return KeyEventResult.ignored;
     }
 
     final key = event.logicalKey;
+
+    // ── Route to open panel first — it captures everything ─────────────
+    if (_leftPanelCtrl.isOpen) {
+      // Same key that opened it also closes it
+      if (key == state.settings.quickPanelLeftKey) {
+        _leftPanelCtrl.close();
+        setState(() {});
+        return KeyEventResult.handled;
+      }
+      return _leftPanelCtrl.handleKey(event, state);
+    }
+
+    if (_rightPanelCtrl.isOpen) {
+      if (key == state.settings.quickPanelRightKey) {
+        _rightPanelCtrl.close();
+        setState(() {});
+        return KeyEventResult.handled;
+      }
+      return _rightPanelCtrl.handleKey(event, state);
+    }
+
+    // ── Assigned panel keys — open the respective panel ─────────────────
+    final leftKey = state.settings.quickPanelLeftKey;
+    final rightKey = state.settings.quickPanelRightKey;
+
+    if (leftKey != null && key == leftKey) {
+      _leftPanelCtrl.open();
+      setState(() {});
+      return KeyEventResult.handled;
+    }
+    if (rightKey != null && key == rightKey) {
+      _rightPanelCtrl.open();
+      setState(() {});
+      return KeyEventResult.handled;
+    }
+
+    // ── Normal main-screen routing ───────────────────────────────────────
 
     // Y — toggle service at any level
     if (key == LogicalKeyboardKey.keyY ||
@@ -182,7 +289,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     switch (_level) {
-      // ── Level 0: nav panel focused ────────────────────────────────────────
+      // ── Level 0: nav panel focused ──────────────────────────────────────
       case FocusLevel.nav:
         if (key == LogicalKeyboardKey.arrowUp) {
           _cycleSection(-1);
@@ -192,7 +299,6 @@ class _HomeScreenState extends State<HomeScreen> {
           _cycleSection(1);
           return KeyEventResult.handled;
         }
-        // A or ► — enter the section
         if (key == LogicalKeyboardKey.gameButtonA ||
             key == LogicalKeyboardKey.enter ||
             key == LogicalKeyboardKey.select ||
@@ -203,37 +309,28 @@ class _HomeScreenState extends State<HomeScreen> {
               _cursorRow = 0;
             });
           } else {
-            // About has no rows — just enter as a view
             setState(() => _level = FocusLevel.section);
           }
           return KeyEventResult.handled;
         }
         return KeyEventResult.ignored;
 
-      // ── Level 1: inside section, row cursor ───────────────────────────────
+      // ── Level 1: inside section, row cursor ─────────────────────────────
       case FocusLevel.section:
         if (key == LogicalKeyboardKey.arrowUp) {
-          if (_cursorRow > 0) {
-            setState(() => _cursorRow--);
-          }
+          if (_cursorRow > 0) setState(() => _cursorRow--);
           return KeyEventResult.handled;
         }
         if (key == LogicalKeyboardKey.arrowDown) {
-          if (_cursorRow < _rowCount - 1) {
-            setState(() => _cursorRow++);
-          }
+          if (_cursorRow < _rowCount - 1) setState(() => _cursorRow++);
           return KeyEventResult.handled;
         }
-        // A — enter slider on this row
         if (key == LogicalKeyboardKey.gameButtonA ||
             key == LogicalKeyboardKey.enter ||
             key == LogicalKeyboardKey.select) {
-          if (_rowCount > 0) {
-            setState(() => _level = FocusLevel.slider);
-          }
+          if (_rowCount > 0) setState(() => _level = FocusLevel.slider);
           return KeyEventResult.handled;
         }
-        // B or ◄ — back to nav
         if (key == LogicalKeyboardKey.gameButtonB ||
             key == LogicalKeyboardKey.escape ||
             key == LogicalKeyboardKey.browserBack ||
@@ -246,7 +343,7 @@ class _HomeScreenState extends State<HomeScreen> {
         }
         return KeyEventResult.ignored;
 
-      // ── Level 2: slider active, ◄► adjusts ───────────────────────────────
+      // ── Level 2: slider active ──────────────────────────────────────────
       case FocusLevel.slider:
         if (key == LogicalKeyboardKey.arrowLeft) {
           _activeControllers[_cursorRow].nudge(-1);
@@ -256,7 +353,6 @@ class _HomeScreenState extends State<HomeScreen> {
           _activeControllers[_cursorRow].nudge(1);
           return KeyEventResult.handled;
         }
-        // A or B — exit slider, stay on same row
         if (key == LogicalKeyboardKey.gameButtonA ||
             key == LogicalKeyboardKey.enter ||
             key == LogicalKeyboardKey.select ||

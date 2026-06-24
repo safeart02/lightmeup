@@ -10,13 +10,15 @@ import androidx.activity.result.ActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterFragmentActivity() {
 
     companion object {
-        private const val TAG     = "MainActivity"
-        private const val CHANNEL = "com.example.lightmeup/lightmeup"
+        private const val TAG           = "MainActivity"
+        private const val METHOD_CHANNEL = "com.example.lightmeup/lightmeup"
+        private const val EVENT_CHANNEL  = "com.example.lightmeup/colors"
     }
 
     private lateinit var projectionManager: MediaProjectionManager
@@ -27,12 +29,11 @@ class MainActivity : FlutterFragmentActivity() {
     private var pendingSmoothing  = 0.35f
     private var pendingZoneWidth  = 0.15f
 
-    // ── Activity Result Launchers (replaces deprecated onActivityResult) ───
+    // ── Activity Result Launchers ─────────────────────────────────────────
 
     private val writeSettingsLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { _: ActivityResult ->
-        // Result code is always RESULT_CANCELED for WRITE_SETTINGS — check canWrite() instead
         if (Settings.System.canWrite(this)) {
             Log.i(TAG, "WRITE_SETTINGS granted")
             requestProjectionPermission()
@@ -74,13 +75,13 @@ class MainActivity : FlutterFragmentActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
-        // Clear stale state from previous engine instance (hot restart etc.)
         pendingResult = null
 
         projectionManager = getSystemService(MEDIA_PROJECTION_SERVICE)
             as MediaProjectionManager
 
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
+        // ── MethodChannel (unchanged) ──────────────────────────────────────
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, METHOD_CHANNEL)
             .setMethodCallHandler { call, result ->
                 when (call.method) {
 
@@ -91,7 +92,6 @@ class MainActivity : FlutterFragmentActivity() {
                             return@setMethodCallHandler
                         }
 
-                        // Drop stale result instead of blocking
                         if (pendingResult != null) {
                             Log.w(TAG, "Dropping stale pendingResult")
                             pendingResult = null
@@ -144,6 +144,22 @@ class MainActivity : FlutterFragmentActivity() {
                     else -> result.notImplemented()
                 }
             }
+
+        // ── EventChannel — streams LED colours to Flutter ──────────────────
+        // The sink is stored on LightmeupService.colorSink so the capture
+        // thread (via mainHandler.post) can reach it without a circular ref.
+        EventChannel(flutterEngine.dartExecutor.binaryMessenger, EVENT_CHANNEL)
+            .setStreamHandler(object : EventChannel.StreamHandler {
+                override fun onListen(arguments: Any?, sink: EventChannel.EventSink) {
+                    Log.i(TAG, "EventChannel: Flutter is listening for colours")
+                    LightmeupService.colorSink = sink
+                }
+
+                override fun onCancel(arguments: Any?) {
+                    Log.i(TAG, "EventChannel: Flutter cancelled colour stream")
+                    LightmeupService.colorSink = null
+                }
+            })
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────

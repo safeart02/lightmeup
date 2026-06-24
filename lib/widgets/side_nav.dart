@@ -13,8 +13,6 @@ class SideNav extends StatelessWidget {
 
   final NavSection selected;
   final bool isRunning;
-
-  /// True when Level 0 is active — the nav panel itself has gamepad focus.
   final bool navFocused;
   final ValueChanged<NavSection> onSelect;
   final VoidCallback onToggle;
@@ -68,6 +66,14 @@ class SideNav extends StatelessWidget {
             onTap: onSelect,
           ),
           _NavItem(
+            icon: Icons.gamepad_rounded,
+            label: 'Controls',
+            section: NavSection.controls,
+            selected: selected,
+            navFocused: navFocused,
+            onTap: onSelect,
+          ),
+          _NavItem(
             icon: Icons.info_outline_rounded,
             label: 'About',
             section: NavSection.about,
@@ -110,8 +116,6 @@ class _NavItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isSelected = section == selected;
-    // "Cursor" = this item is selected AND the nav panel has gamepad focus.
-    // Visually brighter than the dimmer "content open" selected state.
     final isCursor = isSelected && navFocused;
 
     final Color leftBorder;
@@ -121,14 +125,12 @@ class _NavItem extends StatelessWidget {
     final FontWeight labelWeight;
 
     if (isCursor) {
-      // Full-brightness cyan: nav panel is focused here
       leftBorder = ConsoleColors.cyan;
       bg = ConsoleColors.cyanDim;
       iconColor = ConsoleColors.cyan;
       labelColor = ConsoleColors.cyan;
       labelWeight = FontWeight.w700;
     } else if (isSelected) {
-      // Dimmer: content is open but nav panel is not focused
       leftBorder = ConsoleColors.cyan.withOpacity(0.35);
       bg = ConsoleColors.cyanGlow;
       iconColor = ConsoleColors.cyan.withOpacity(0.6);
@@ -165,7 +167,6 @@ class _NavItem extends StatelessWidget {
                 ),
               ),
             ),
-            // Chevron only when nav is focused — hints "press A to enter"
             if (isCursor)
               Icon(
                 Icons.chevron_right_rounded,
