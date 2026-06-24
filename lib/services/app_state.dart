@@ -8,8 +8,8 @@ class AppState extends ChangeNotifier {
   AppState({
     required SettingsService settingsService,
     required LightmeupChannel channel,
-  })  : _settingsService = settingsService,
-        _channel = channel;
+  }) : _settingsService = settingsService,
+       _channel = channel;
 
   final SettingsService _settingsService;
   final LightmeupChannel _channel;
@@ -27,7 +27,10 @@ class AppState extends ChangeNotifier {
 
   Future<void> init() async {
     _settings = await _settingsService.load();
-    _isRunning = await _channel.isRunning();
+    // Only check native side on first load, not on rebuilds
+    if (!_isRunning) {
+      _isRunning = await _channel.isRunning();
+    }
     _isLoading = false;
     notifyListeners();
   }
@@ -35,40 +38,37 @@ class AppState extends ChangeNotifier {
   // ── Service control ────────────────────────────────────────────────────────
 
   Future<void> toggleService() async {
+    debugPrint('[AppState] toggleService called, _isRunning=$_isRunning');
     if (_isRunning) {
       await _channel.stopService();
       _isRunning = false;
       _settings = _settings.copyWith(serviceEnabled: false);
     } else {
       final started = await _channel.startService(_settings);
+      debugPrint('[AppState] startService returned: $started');
       _isRunning = started;
       _settings = _settings.copyWith(serviceEnabled: started);
     }
     await _settingsService.save(_settings);
+    debugPrint('[AppState] after toggle, _isRunning=$_isRunning');
     notifyListeners();
   }
 
   // ── Settings mutations ─────────────────────────────────────────────────────
 
   Future<void> updateBrightness(double value) => _update(
-        _settings.copyWith(brightness: value),
-        push: true, // brightness change takes effect immediately
-      );
+    _settings.copyWith(brightness: value),
+    push: true, // brightness change takes effect immediately
+  );
 
-  Future<void> updateFrameSkip(int value) => _update(
-        _settings.copyWith(frameSkip: value),
-        push: true,
-      );
+  Future<void> updateFrameSkip(int value) =>
+      _update(_settings.copyWith(frameSkip: value), push: true);
 
-  Future<void> updateSmoothing(double value) => _update(
-        _settings.copyWith(smoothing: value),
-        push: true,
-      );
+  Future<void> updateSmoothing(double value) =>
+      _update(_settings.copyWith(smoothing: value), push: true);
 
-  Future<void> updateZoneWidth(double value) => _update(
-        _settings.copyWith(zoneWidth: value),
-        push: true,
-      );
+  Future<void> updateZoneWidth(double value) =>
+      _update(_settings.copyWith(zoneWidth: value), push: true);
 
   /// Internal: persist + optionally push to the live native service.
   Future<void> _update(AppSettings next, {bool push = false}) async {

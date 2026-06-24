@@ -48,7 +48,7 @@ class HomeScreen extends StatelessWidget {
 
             Center(
               child: Text(
-                state.isRunning ? 'Syncing LEDs…' : 'Service stopped',
+                state.isRunning ? "LEDs Active" : "Service stopped",
                 style: TextStyle(
                   color: state.isRunning ? cs.primary : cs.outline,
                   fontSize: 13,

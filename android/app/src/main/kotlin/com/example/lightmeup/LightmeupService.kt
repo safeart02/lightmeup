@@ -1,6 +1,7 @@
 package com.example.lightmeup
 
 import android.app.*
+import android.graphics.Color
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -22,8 +23,8 @@ class LightmeupService : Service() {
         private const val NOTIF_ID = 1001
         private const val CHANNEL_ID = "lightmeup_channel"
 
-        private const val CAPTURE_W = 320
-        private const val CAPTURE_H = 180
+        private const val CAPTURE_W = 160
+        private const val CAPTURE_H = 90
 
         const val EXTRA_RESULT_CODE = "result_code"
         const val EXTRA_DATA        = "data"
@@ -43,16 +44,21 @@ class LightmeupService : Service() {
     @Volatile private var frameSkip  = 1
     @Volatile private var smoothing  = 0.35f
     @Volatile private var zoneWidth  = 0.15f
+    @Volatile private var isCapturing = false
 
     private var frameCounter    = 0
     private var framesProcessed = 0
     private var framesDropped   = 0
 
+    private var smoothedLeft  = Color.BLACK
+    private var smoothedRight = Color.BLACK
+
     private lateinit var projectionManager: MediaProjectionManager
     private var mediaProjection: MediaProjection? = null
     private var virtualDisplay: VirtualDisplay?   = null
     private var imageReader: ImageReader?         = null
-    private val handler = Handler(Looper.getMainLooper())
+    private val handlerThread = HandlerThread("LightMeUpCapture").also { it.start() }
+    private val handler = Handler(handlerThread.looper)
 
     private lateinit var ledController: RetroidLEDController
 
@@ -172,6 +178,7 @@ class LightmeupService : Service() {
             DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
             imageReader!!.surface, null, null
         )
+        isCapturing = true
 
         Log.i(TAG, "VirtualDisplay created: ${CAPTURE_W}x${CAPTURE_H} @ ${density}dpi")
     }
@@ -190,6 +197,10 @@ class LightmeupService : Service() {
             Log.w(TAG, "acquireLatestImage returned null (frame $frameCounter)")
             return
         }
+        if (!isCapturing) {
+            image.close()
+            return
+        }
 
         try {
             val plane  = image.planes[0]
@@ -203,9 +214,24 @@ class LightmeupService : Service() {
                 Bitmap.createBitmap(bitmap, 0, 0, CAPTURE_W, CAPTURE_H)
             else bitmap
 
-            val (leftColor, rightColor) = ColorSampler.sample(cropped, zoneWidth, smoothing)
-            ledController.setZoneColors(leftColor, rightColor)
+            val (leftColor, rightColor) = ColorSampler.sample(cropped, zoneWidth, smoothing = 0f)
 
+            // Fast temporal smoothing — average over ~4 frames, no perceptible lag
+            val alpha = 0.25f  // higher = faster reaction, lower = smoother
+            smoothedLeft  = lerpColor(smoothedLeft,  leftColor,  alpha)
+            smoothedRight = lerpColor(smoothedRight, rightColor, alpha)
+
+            val leftLuma  = Color.red(smoothedLeft)  * 0.299 + Color.green(smoothedLeft)  * 0.587 + Color.blue(smoothedLeft)  * 0.114
+            val rightLuma = Color.red(smoothedRight) * 0.299 + Color.green(smoothedRight) * 0.587 + Color.blue(smoothedRight) * 0.114
+            val avgLuma   = (leftLuma + rightLuma) / 2.0
+
+            if (avgLuma < 8.0) {
+                ledController.setZoneColors(Color.BLACK, Color.BLACK)
+            } else {
+                val boostedLeft  = ledController.boostSaturation(smoothedLeft,  brightness = brightness)
+                val boostedRight = ledController.boostSaturation(smoothedRight, brightness = brightness)
+                ledController.setZoneColors(boostedLeft, boostedRight)
+            }
             framesProcessed++
 
             if (framesProcessed % 100 == 0) {
@@ -224,6 +250,7 @@ class LightmeupService : Service() {
     }
 
     private fun stopCapture() {
+        isCapturing = false
         Log.i(TAG, "stopCapture")
         virtualDisplay?.release()
         imageReader?.close()
@@ -231,6 +258,14 @@ class LightmeupService : Service() {
         virtualDisplay  = null
         imageReader     = null
         mediaProjection = null
+        handlerThread.quitSafely()
+    }
+
+    private fun lerpColor(from: Int, to: Int, alpha: Float): Int {
+        val r = (Color.red(from)   + (Color.red(to)   - Color.red(from))   * alpha).toInt().coerceIn(0, 255)
+        val g = (Color.green(from) + (Color.green(to) - Color.green(from)) * alpha).toInt().coerceIn(0, 255)
+        val b = (Color.blue(from)  + (Color.blue(to)  - Color.blue(from))  * alpha).toInt().coerceIn(0, 255)
+        return Color.rgb(r, g, b)
     }
 
     // ── Notification ───────────────────────────────────────────────────────

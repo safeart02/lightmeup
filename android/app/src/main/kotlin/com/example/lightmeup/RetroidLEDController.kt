@@ -2,32 +2,28 @@ package com.example.lightmeup
 
 import android.content.Context
 import android.graphics.Color
+import android.os.IBinder
+import android.os.Parcel
 import android.provider.Settings
 import android.util.Log
 
 /**
- * Controls the Retroid Pocket 6 joystick LEDs.
+ * Controls Retroid Pocket 6 joystick LEDs.
  *
- * The RP6 uses the SN3112 LED driver. RPSettings.apk (com.ro.settings) manages it
- * via Settings.Secure keys and direct sysfs echo commands.
+ * Working path: direct sysfs writes using the format confirmed from RPSettings.apk DEX analysis:
+ *   /sys/class/sn3112l/led/brightness  ← "1-{R}:{G}:{B}"
+ *   /sys/class/sn3112r/led/brightness  ← "1-{R}:{G}:{B}"
+ *   /sys/class/sn3112l/led/enable      ← "1" / "0"  (world-writable)
+ *   /sys/class/sn3112r/led/enable      ← "1" / "0"  (world-writable)
  *
- * Key findings from APK reverse engineering:
+ * Settings.Secure keys (persists across reboot, requires WRITE_SECURE_SETTINGS):
+ *   joystick_led_light_picker_color     — "#RRGGBB,#RRGGBB" (left,right)
+ *   joystick_light_enabled              — "1,1" / "0,0"
+ *   joystick_handle_light_picker_color  — "#RRGGBB,#RRGGBB,#RRGGBB,#RRGGBB"
+ *   joystick_handle_light_enabled       — "1,1,1,1" / "0,0,0,0"
+ *   led_light_brightness_percent        — float 0.0–1.0
  *
- * Settings.Secure keys (require WRITE_SECURE_SETTINGS):
- *   joystick_led_light_picker_color   — color as "#RRGGBB" (single) or "#RRGGBB,#RRGGBB" (L,R)
- *   joystick_light_enabled            — "1" / "0"  (master LED on/off)
- *   joystick_handle_light_enabled     — "1" / "0"  (handle/grip LED zone)
- *   joystick_handle_light_picker_color — "#RRGGBB"  (handle LED color)
- *   led_light_brightness_percent      — "0"–"100"
- *
- * Sysfs paths (require root or system UID):
- *   /sys/class/sn3112l/led/brightness   (left  — format negotiated at runtime, see writeSysfs)
- *   /sys/class/sn3112r/led/brightness   (right)
- *   /sys/class/sn3112l/led/enable       — "1" / "0"
- *   /sys/class/sn3112r/led/enable       — "1" / "0"
- *   /sys/class/sn3112l/led/vled_enable  — "1" / "0"  (voltage rail for LEDs; must be on)
- *
- * Grant the permission once via ADB:
+ * Grant once via ADB:
  *   adb shell pm grant com.example.lightmeup android.permission.WRITE_SECURE_SETTINGS
  */
 class RetroidLEDController(private val context: Context) {
@@ -35,134 +31,104 @@ class RetroidLEDController(private val context: Context) {
     companion object {
         private const val TAG = "RetroidLED"
 
-        // ── Settings.Secure keys (discovered from RPSettings.apk DEX strings) ──────
-        private const val KEY_COLOR               = "joystick_led_light_picker_color"
-        private const val KEY_LIGHT_ENABLED       = "joystick_light_enabled"
-        private const val KEY_HANDLE_ENABLED      = "joystick_handle_light_enabled"
-        private const val KEY_HANDLE_COLOR        = "joystick_handle_light_picker_color"
-        private const val KEY_BRIGHTNESS          = "led_light_brightness_percent"
+        // Binder service (SettingsController) — kept for future use but not reliable
+        private const val SERVICE_NAME   = "SettingsController"
+        private const val DESCRIPTOR     = "com.ro.settings.IExternalControlManager"
+        private const val TRANSACTION_SET = 1
+        private const val TRANSACTION_GET = 3
 
-        // ── Sysfs paths ─────────────────────────────────────────────────────────────
-        private const val SYSFS_LEFT_BRIGHT       = "/sys/class/sn3112l/led/brightness"
-        private const val SYSFS_RIGHT_BRIGHT      = "/sys/class/sn3112r/led/brightness"
-        private const val SYSFS_LEFT_EN           = "/sys/class/sn3112l/led/enable"
-        private const val SYSFS_RIGHT_EN          = "/sys/class/sn3112r/led/enable"
-        // The voltage rail must be enabled before brightness writes take effect
-        private const val SYSFS_LEFT_VLED         = "/sys/class/sn3112l/led/vled_enable"
+        // Settings.Secure keys
+        private const val KEY_COLOR          = "joystick_led_light_picker_color"
+        private const val KEY_ENABLED        = "joystick_light_enabled"
+        private const val KEY_HANDLE_COLOR   = "joystick_handle_light_picker_color"
+        private const val KEY_HANDLE_ENABLED = "joystick_handle_light_enabled"
+        private const val KEY_BRIGHTNESS     = "led_light_brightness_percent"
+
+        // Sysfs paths
+        private const val SYSFS_LEFT_BRIGHT = "/sys/class/sn3112l/led/brightness"
+        private const val SYSFS_RIGHT_BRIGHT = "/sys/class/sn3112r/led/brightness"
+        private const val SYSFS_LEFT_EN     = "/sys/class/sn3112l/led/enable"
+        private const val SYSFS_RIGHT_EN    = "/sys/class/sn3112r/led/enable"
+        private const val SYSFS_LEFT_VLED   = "/sys/class/sn3112l/led/vled_enable"
     }
 
     @Volatile private var brightnessScale = 1.0f
+    @Volatile private var binderCache: IBinder? = null
 
     // ── Public API ───────────────────────────────────────────────────────────────
 
-    /**
-     * Set independent colors for the left and right joystick LEDs.
-     * Brightness scaling is applied before writing.
-     */
     fun setZoneColors(leftArgb: Int, rightArgb: Int) {
-        val leftScaled  = applyBrightness(leftArgb)
-        val rightScaled = applyBrightness(rightArgb)
+        val leftHex  = toRgbHex(leftArgb)
+        val rightHex = toRgbHex(rightArgb)
 
-        // 1. Write to sysfs (works when running as system UID or with root)
-        writeSysfs(leftScaled, rightScaled)
+        // Primary path: direct sysfs write using confirmed format "1-R:G:B"
+        val sysfsOk = writeSysfs(leftArgb, rightArgb)
 
-        // 2. Write to Settings.Secure so RPSettings persists the value across reboots
-        val leftHex  = toRgbHex(leftScaled)
-        val rightHex = toRgbHex(rightScaled)
-        // RPSettings uses "LEFT,RIGHT" when zones differ, plain hex when they match
+        // Secondary path: Settings.Secure (persists across reboot)
         val colorValue = if (leftHex == rightHex) leftHex else "$leftHex,$rightHex"
         trySecureWrite(KEY_COLOR, colorValue)
-        // Handle LEDs share the same color in the app's UI
-        trySecureWrite(KEY_HANDLE_COLOR, leftHex)
+        trySecureWrite(KEY_HANDLE_COLOR, "$leftHex,$leftHex,$leftHex,$leftHex")
 
-        Log.d(TAG, "setZoneColors left=$leftHex right=$rightHex")
+        Log.d(TAG, "setZoneColors left=$leftHex right=$rightHex sysfsOk=$sysfsOk")
     }
 
-    /** Convenience: set both zones to the same color. */
     fun setColor(argb: Int) = setZoneColors(argb, argb)
 
-    /**
-     * Enable or disable the joystick LEDs.
-     *
-     * The RPSettings app writes both the Settings.Secure key AND the sysfs node;
-     * we do the same for maximum compatibility.
-     */
     fun setEnabled(on: Boolean) {
         val flag = if (on) "1" else "0"
 
-        // Ensure the voltage rail is on before enabling brightness output
-        if (on) {
-            runShell("echo 1 > $SYSFS_LEFT_VLED")
-        }
+        // vled_enable requires elevated permissions — attempt but don't rely on it
+        if (on) runShell("echo 1 > $SYSFS_LEFT_VLED")
 
-        val sysfsOk = runShell(
-            "echo $flag > $SYSFS_LEFT_EN && echo $flag > $SYSFS_RIGHT_EN"
-        )
+        // enable nodes are world-writable — this works reliably
+        runShell("echo $flag > $SYSFS_LEFT_EN && echo $flag > $SYSFS_RIGHT_EN")
 
-        // Mirror to Secure settings regardless of sysfs result
-        trySecureWrite(KEY_LIGHT_ENABLED, flag)
-        trySecureWrite(KEY_HANDLE_ENABLED, flag)
+        trySecureWrite(KEY_ENABLED, "$flag,$flag")
+        trySecureWrite(KEY_HANDLE_ENABLED, "$flag,$flag,$flag,$flag")
 
-        if (!sysfsOk) {
-            Log.w(TAG, "setEnabled=$on: sysfs write failed (may need root/system UID)")
-        }
-        Log.d(TAG, "setEnabled=$on sysfsOk=$sysfsOk")
+        Log.d(TAG, "setEnabled=$on")
     }
 
-    /**
-     * Set brightness as a 0.0–1.0 fraction.
-     * Writes the percentage to Settings.Secure; the scale is also cached locally
-     * so subsequent [setColor] / [setZoneColors] calls use it.
-     */
     fun setBrightness(fraction: Float) {
         brightnessScale = fraction.coerceIn(0f, 1f)
-        val pct = (brightnessScale * 100).toInt().toString()
+        val pct = brightnessScale.toString()
         trySecureWrite(KEY_BRIGHTNESS, pct)
-        Log.d(TAG, "setBrightness=${brightnessScale} ($pct%)")
+        Log.d(TAG, "setBrightness=$brightnessScale")
     }
 
-    /**
-     * Restore to sensible defaults: full brightness, white, enabled.
-     * Mirrors what RPSettings does on its "reset" path.
-     */
     fun restore() {
         setBrightness(1.0f)
         setEnabled(true)
         setZoneColors(Color.WHITE, Color.WHITE)
     }
 
-    // ── Sysfs writer — tries every format the SN3112 driver accepts ──────────────
+    fun boostSaturation(argb: Int, factor: Float = 2.5f, brightness: Float = 1.0f): Int {
+    val hsv = FloatArray(3)
+    Color.colorToHSV(argb, hsv)
+    hsv[1] = (hsv[1] * factor).coerceIn(0f, 1f)
+    hsv[2] = (hsv[2] * 1.2f * brightness).coerceIn(0f, 1f)
+    return Color.HSVToColor(hsv)
+}
 
+    // ── Sysfs — confirmed working format from RPSettings.apk DEX ────────────────
+
+    /**
+     * Writes color to sysfs using the format confirmed from RPSettings.apk source:
+     *   d.d("/sys/class/sn3112l/led/brightness", "1-R:G:B", false)
+     * where R/G/B are already brightness-scaled integer values (0–255).
+     */
     private fun writeSysfs(leftArgb: Int, rightArgb: Int): Boolean {
-        val lR = Color.red(leftArgb);   val lG = Color.green(leftArgb);  val lB = Color.blue(leftArgb)
-        val rR = Color.red(rightArgb);  val rG = Color.green(rightArgb); val rB = Color.blue(rightArgb)
-
-        // Format 1: "R G B" space-separated (most common for packed SN3112 node)
-        if (runShell("echo '$lR $lG $lB' > $SYSFS_LEFT_BRIGHT && echo '$rR $rG $rB' > $SYSFS_RIGHT_BRIGHT")) {
-            Log.d(TAG, "sysfs format='R G B' ✓"); return true
+        return try {
+            val leftVal  = "1-${Color.red(leftArgb)}:${Color.green(leftArgb)}:${Color.blue(leftArgb)}"
+            val rightVal = "1-${Color.red(rightArgb)}:${Color.green(rightArgb)}:${Color.blue(rightArgb)}"
+            java.io.FileWriter(SYSFS_LEFT_BRIGHT).use  { it.write(leftVal) }
+            java.io.FileWriter(SYSFS_RIGHT_BRIGHT).use { it.write(rightVal) }
+            Log.d(TAG, "sysfs write OK: left=$leftVal right=$rightVal")
+            true
+        } catch (e: Exception) {
+            Log.w(TAG, "sysfs write failed: ${e.message}")
+            false
         }
-
-        // Format 2: lowercase hex "rrggbb"
-        val lHex = "%02x%02x%02x".format(lR, lG, lB)
-        val rHex = "%02x%02x%02x".format(rR, rG, rB)
-        if (runShell("echo '$lHex' > $SYSFS_LEFT_BRIGHT && echo '$rHex' > $SYSFS_RIGHT_BRIGHT")) {
-            Log.d(TAG, "sysfs format=hex ✓"); return true
-        }
-
-        // Format 3: "0xRRGGBB" prefixed hex
-        if (runShell("echo '0x${lHex.uppercase()}' > $SYSFS_LEFT_BRIGHT && echo '0x${rHex.uppercase()}' > $SYSFS_RIGHT_BRIGHT")) {
-            Log.d(TAG, "sysfs format=0xRRGGBB ✓"); return true
-        }
-
-        // Format 4: packed 24-bit decimal
-        val lDec = (lR shl 16) or (lG shl 8) or lB
-        val rDec = (rR shl 16) or (rG shl 8) or rB
-        if (runShell("echo $lDec > $SYSFS_LEFT_BRIGHT && echo $rDec > $SYSFS_RIGHT_BRIGHT")) {
-            Log.d(TAG, "sysfs format=packed-decimal ✓"); return true
-        }
-
-        Log.e(TAG, "All sysfs formats failed — LEDs may only update via Settings.Secure reboot persistence")
-        return false
     }
 
     // ── Shell helper ─────────────────────────────────────────────────────────────
@@ -183,30 +149,22 @@ class RetroidLEDController(private val context: Context) {
         }
     }
 
-    // ── Settings.Secure writer ───────────────────────────────────────────────────
+    // ── Settings.Secure ──────────────────────────────────────────────────────────
 
     private fun trySecureWrite(key: String, value: String): Boolean {
         return try {
             val ok = Settings.Secure.putString(context.contentResolver, key, value)
             if (ok) Log.d(TAG, "Secure '$key'='$value' ✓")
-            else    Log.w(TAG, "Secure '$key' write returned false (missing WRITE_SECURE_SETTINGS?)")
+            else    Log.w(TAG, "Secure '$key' write failed")
             ok
         } catch (e: Exception) {
-            Log.w(TAG, "Secure write failed '$key': ${e.message}")
+            Log.w(TAG, "Secure write exception '$key': ${e.message}")
             false
         }
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────────
 
-    private fun applyBrightness(argb: Int): Int {
-        val r = (Color.red(argb)   * brightnessScale).toInt().coerceIn(0, 255)
-        val g = (Color.green(argb) * brightnessScale).toInt().coerceIn(0, 255)
-        val b = (Color.blue(argb)  * brightnessScale).toInt().coerceIn(0, 255)
-        return Color.argb(255, r, g, b)
-    }
-
-    /** Formats an ARGB int as "#RRGGBB" — the exact format RPSettings writes. */
     private fun toRgbHex(argb: Int): String =
         "#%02X%02X%02X".format(Color.red(argb), Color.green(argb), Color.blue(argb))
 }

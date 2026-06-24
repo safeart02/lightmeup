@@ -57,7 +57,11 @@ class MainActivity : FlutterFragmentActivity() {
                 putExtra(LightmeupService.EXTRA_ZONE_WIDTH, pendingZoneWidth)
             }
             startForegroundService(serviceIntent)
-            pendingResult?.success(true)
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                pendingResult?.success(LightmeupService.isRunning)
+                pendingResult = null
+            }, 500)
+            return@registerForActivityResult
         } else {
             Log.e(TAG, "MediaProjection denied (resultCode=${result.resultCode})")
             pendingResult?.success(false)
@@ -116,7 +120,9 @@ class MainActivity : FlutterFragmentActivity() {
                     "stopService" -> {
                         Log.d(TAG, "stopService called")
                         stopService(Intent(this, LightmeupService::class.java))
-                        result.success(null)
+                        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                            result.success(null)
+                        }, 300)
                     }
 
                     "updateSettings" -> {
