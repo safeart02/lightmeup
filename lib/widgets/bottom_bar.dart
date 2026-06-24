@@ -252,15 +252,15 @@ class SettingGroup extends StatelessWidget {
 
 // ── Slider controller ─────────────────────────────────────────────────────────
 
+/// Callback-based controller so it can be used across files.
+/// attach() / detach() are public because Dart's _ prefix is file-private.
 class SliderController {
-  ConsoleSliderState? _state;
+  void Function(int)? _nudgeCallback;
 
-  void attach(ConsoleSliderState s) => _state = s;
-  void detach(ConsoleSliderState s) {
-    if (_state == s) _state = null;
-  }
+  void attach(void Function(int) callback) => _nudgeCallback = callback;
+  void detach() => _nudgeCallback = null;
 
-  void nudge(int direction) => _state?._nudge(direction);
+  void nudge(int direction) => _nudgeCallback?.call(direction);
 }
 
 // ── Setting row ───────────────────────────────────────────────────────────────
@@ -361,25 +361,25 @@ class ConsoleSlider extends StatefulWidget {
   final SliderController? controller;
 
   @override
-  State<ConsoleSlider> createState() => ConsoleSliderState();
+  State<ConsoleSlider> createState() => _ConsoleSliderState();
 }
 
-class ConsoleSliderState extends State<ConsoleSlider> {
+class _ConsoleSliderState extends State<ConsoleSlider> {
   late double _local;
 
   @override
   void initState() {
     super.initState();
     _local = widget.value.clamp(widget.min, widget.max);
-    widget.controller?.attach(this);
+    widget.controller?.attach(_nudge);
   }
 
   @override
   void didUpdateWidget(ConsoleSlider old) {
     super.didUpdateWidget(old);
     if (old.controller != widget.controller) {
-      old.controller?.detach(this);
-      widget.controller?.attach(this);
+      old.controller?.detach();
+      widget.controller?.attach(_nudge);
     }
     if (old.value != widget.value) {
       _local = widget.value.clamp(widget.min, widget.max);
@@ -388,7 +388,7 @@ class ConsoleSliderState extends State<ConsoleSlider> {
 
   @override
   void dispose() {
-    widget.controller?.detach(this);
+    widget.controller?.detach();
     super.dispose();
   }
 

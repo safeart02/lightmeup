@@ -684,21 +684,8 @@ class _PanelSliderRowState extends State<_PanelSliderRow> {
   void initState() {
     super.initState();
     _local = widget.value.clamp(widget.min, widget.max);
-    widget.controller.attach(buildSliderState());
+    widget.controller.attach(_nudge);
   }
-
-  // Build a minimal SliderController-compatible state bridge.
-  // We can't attach _ConsoleSliderState directly here since we own our own
-  // slider; instead we attach a shim that delegates to this widget's state.
-  ShimSliderState buildSliderState() => ShimSliderState(
-    nudge: (dir) {
-      final step = (widget.max - widget.min) / widget.divisions;
-      final next = (_local + dir * step).clamp(widget.min, widget.max);
-      if (next == _local) return;
-      setState(() => _local = next);
-      widget.onChanged(next);
-    },
-  );
 
   @override
   void didUpdateWidget(_PanelSliderRow old) {
@@ -706,6 +693,20 @@ class _PanelSliderRowState extends State<_PanelSliderRow> {
     if (old.value != widget.value) {
       _local = widget.value.clamp(widget.min, widget.max);
     }
+  }
+
+  @override
+  void dispose() {
+    widget.controller.detach();
+    super.dispose();
+  }
+
+  void _nudge(int dir) {
+    final step = (widget.max - widget.min) / widget.divisions;
+    final next = (_local + dir * step).clamp(widget.min, widget.max);
+    if (next == _local) return;
+    setState(() => _local = next);
+    widget.onChanged(next);
   }
 
   @override
@@ -802,13 +803,6 @@ class _PanelSliderRowState extends State<_PanelSliderRow> {
   }
 }
 
-/// Shim that bridges [SliderController.nudge] to a plain callback,
-/// since the panel rows own their slider state directly.
-class ShimSliderState {
-  ShimSliderState({required this.nudge});
-  final void Function(int) nudge;
-}
-
 // ── Panel bottom hint ─────────────────────────────────────────────────────────
 
 class _PanelHint extends StatelessWidget {
@@ -832,10 +826,7 @@ class _PanelHint extends StatelessWidget {
             label: isSlider ? 'Adjust' : 'Select',
           ),
           const SizedBox(width: 16),
-          _MiniHint(
-            button: isSlider ? 'A' : 'A',
-            label: isSlider ? 'Confirm' : 'Adjust',
-          ),
+          _MiniHint(button: 'A', label: isSlider ? 'Confirm' : 'Adjust'),
           const SizedBox(width: 16),
           _MiniHint(button: 'B', label: 'Close'),
         ],
