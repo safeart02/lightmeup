@@ -17,6 +17,10 @@ class AppState extends ChangeNotifier {
   final SettingsService _settingsService;
   final LightmeupChannel _channel;
 
+  /// Exposed so overlay_main.dart can call setOverlayFocusable() directly
+  /// without needing a full AppState method for every window-manager call.
+  LightmeupChannel get channel => _channel;
+
   AppSettings _settings = const AppSettings();
   AppSettings get settings => _settings;
 
@@ -25,6 +29,13 @@ class AppState extends ChangeNotifier {
 
   bool _isLoading = true;
   bool get isLoading => _isLoading;
+
+  // ── Overlay state ────────────────────────────────────────────────
+
+  bool _isOverlayRunning = false;
+
+  /// Whether the system-overlay window (OverlayService) is active.
+  bool get isOverlayRunning => _isOverlayRunning;
 
   // ── Live LED colours ───────────────────────────────────────────────────
 
@@ -37,21 +48,21 @@ class AppState extends ChangeNotifier {
 
   Future<void> init() async {
     _settings = await _settingsService.load();
+
     if (!_isRunning) {
       _isRunning = await _channel.isRunning();
     }
+    _isOverlayRunning = await _channel.isOverlayRunning();
+
     _isLoading = false;
 
     // Subscribe to the colour stream unconditionally — the native side only
     // emits when the service is running, so we don't need to start/stop the
     // subscription with the service.
-    _colorSub = _channel.colorStream.listen(
-      (colors) {
-        _currentColors = colors;
-        notifyListeners();
-      },
-      onError: (e) => debugPrint('[AppState] colorStream error: $e'),
-    );
+    _colorSub = _channel.colorStream.listen((colors) {
+      _currentColors = colors;
+      notifyListeners();
+    }, onError: (e) => debugPrint('[AppState] colorStream error: $e'));
 
     notifyListeners();
   }
@@ -62,7 +73,7 @@ class AppState extends ChangeNotifier {
     super.dispose();
   }
 
-  // ── Service control ────────────────────────────────────────────────────
+  // ── LightmeupService control ──────────────────────────────
 
   Future<void> toggleService() async {
     debugPrint('[AppState] toggleService called, _isRunning=$_isRunning');
@@ -70,7 +81,7 @@ class AppState extends ChangeNotifier {
       await _channel.stopService();
       _isRunning = false;
       _settings = _settings.copyWith(serviceEnabled: false);
-      _currentColors = LedColors.black; // reset preview when stopped
+      _currentColors = LedColors.black;
     } else {
       final started = await _channel.startService(_settings);
       debugPrint('[AppState] startService returned: $started');
@@ -82,12 +93,39 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  // ── Settings mutations ─────────────────────────────────────────────────
+  // ── OverlayService control ───────────────────────────────────────
 
-  Future<void> updateBrightness(double value) => _update(
-    _settings.copyWith(brightness: value),
-    push: true,
-  );
+  /// Start the system-overlay window so the quick panel appears above other
+  /// apps. Returns true if the overlay is now running (permission may be
+  /// requested from the user if not already granted).
+  Future<bool> startOverlay() async {
+    if (_isOverlayRunning) return true;
+    final ok = await _channel.startOverlay();
+    _isOverlayRunning = ok;
+    notifyListeners();
+    return ok;
+  }
+
+  /// Stop the overlay window.
+  Future<void> stopOverlay() async {
+    await _channel.stopOverlay();
+    _isOverlayRunning = false;
+    notifyListeners();
+  }
+
+  /// Start or stop the overlay window depending on its current state.
+  Future<void> toggleOverlay() async {
+    if (_isOverlayRunning) {
+      await stopOverlay();
+    } else {
+      await startOverlay();
+    }
+  }
+
+  // ── Settings mutations ────────────────────────────────────
+
+  Future<void> updateBrightness(double value) =>
+      _update(_settings.copyWith(brightness: value), push: true);
 
   Future<void> updateFrameSkip(int value) =>
       _update(_settings.copyWith(frameSkip: value), push: true);
@@ -98,17 +136,13 @@ class AppState extends ChangeNotifier {
   Future<void> updateZoneWidth(double value) =>
       _update(_settings.copyWith(zoneWidth: value), push: true);
 
-  // ── Key binding mutations ──────────────────────────────────────────────
+  // ── Key binding mutations (Updated for combinations) ─────────────────
 
-  /// Assign [key] as the trigger for the left quick panel.
-  /// Pass null to clear the binding.
-  Future<void> setQuickPanelLeftKey(LogicalKeyboardKey? key) =>
-      _update(_settings.copyWith(quickPanelLeftKey: key));
+  Future<void> setQuickPanelLeftKeys(List<LogicalKeyboardKey>? keys) =>
+      _update(_settings.copyWith(quickPanelLeftKeys: keys));
 
-  /// Assign [key] as the trigger for the right quick panel.
-  /// Pass null to clear the binding.
-  Future<void> setQuickPanelRightKey(LogicalKeyboardKey? key) =>
-      _update(_settings.copyWith(quickPanelRightKey: key));
+  Future<void> setQuickPanelRightKeys(List<LogicalKeyboardKey>? keys) =>
+      _update(_settings.copyWith(quickPanelRightKeys: keys));
 
   // ── Internal ───────────────────────────────────────────────────────────
 

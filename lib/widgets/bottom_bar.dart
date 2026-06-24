@@ -21,9 +21,9 @@ class BottomBar extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       height: 36,
-      color: ConsoleColors.panel,
       padding: const EdgeInsets.symmetric(horizontal: 16),
       decoration: const BoxDecoration(
+        color: ConsoleColors.panel,
         border: Border(top: BorderSide(color: ConsoleColors.border)),
       ),
       child: Row(

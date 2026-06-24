@@ -18,13 +18,13 @@ class AppSettings {
   /// Left zone width as a fraction of screen width (e.g. 0.15 = leftmost 15%)
   final double zoneWidth;
 
-  /// Hardware key that opens the LEFT quick panel.
-  /// Null = no key assigned (swipe-only).
-  final LogicalKeyboardKey? quickPanelLeftKey;
+  /// Hardware key combination that opens the LEFT quick panel.
+  /// Null / empty = no keys assigned (swipe-only).
+  final List<LogicalKeyboardKey>? quickPanelLeftKeys;
 
-  /// Hardware key that opens the RIGHT quick panel.
-  /// Null = no key assigned (swipe-only).
-  final LogicalKeyboardKey? quickPanelRightKey;
+  /// Hardware key combination that opens the RIGHT quick panel.
+  /// Null / empty = no keys assigned (swipe-only).
+  final List<LogicalKeyboardKey>? quickPanelRightKeys;
 
   const AppSettings({
     this.serviceEnabled = false,
@@ -32,8 +32,8 @@ class AppSettings {
     this.frameSkip = 1,
     this.smoothing = 0.35,
     this.zoneWidth = 0.15,
-    this.quickPanelLeftKey,
-    this.quickPanelRightKey,
+    this.quickPanelLeftKeys,
+    this.quickPanelRightKeys,
   });
 
   AppSettings copyWith({
@@ -43,8 +43,8 @@ class AppSettings {
     double? smoothing,
     double? zoneWidth,
     // Use a sentinel to distinguish "set to null" from "leave unchanged".
-    Object? quickPanelLeftKey = _keep,
-    Object? quickPanelRightKey = _keep,
+    Object? quickPanelLeftKeys = _keep,
+    Object? quickPanelRightKeys = _keep,
   }) {
     return AppSettings(
       serviceEnabled: serviceEnabled ?? this.serviceEnabled,
@@ -52,12 +52,12 @@ class AppSettings {
       frameSkip: frameSkip ?? this.frameSkip,
       smoothing: smoothing ?? this.smoothing,
       zoneWidth: zoneWidth ?? this.zoneWidth,
-      quickPanelLeftKey: quickPanelLeftKey == _keep
-          ? this.quickPanelLeftKey
-          : quickPanelLeftKey as LogicalKeyboardKey?,
-      quickPanelRightKey: quickPanelRightKey == _keep
-          ? this.quickPanelRightKey
-          : quickPanelRightKey as LogicalKeyboardKey?,
+      quickPanelLeftKeys: quickPanelLeftKeys == _keep
+          ? this.quickPanelLeftKeys
+          : quickPanelLeftKeys as List<LogicalKeyboardKey>?,
+      quickPanelRightKeys: quickPanelRightKeys == _keep
+          ? this.quickPanelRightKeys
+          : quickPanelRightKeys as List<LogicalKeyboardKey>?,
     );
   }
 
@@ -69,9 +69,11 @@ class AppSettings {
     'frameSkip': frameSkip.toString(),
     'smoothing': smoothing.toString(),
     'zoneWidth': zoneWidth.toString(),
-    // Store as keyId int string, empty string = not assigned.
-    'quickPanelLeftKey': quickPanelLeftKey?.keyId.toString() ?? '',
-    'quickPanelRightKey': quickPanelRightKey?.keyId.toString() ?? '',
+    // Join multiple key IDs with commas, empty string if null or empty
+    'quickPanelLeftKeys':
+        quickPanelLeftKeys?.map((k) => k.keyId).join(',') ?? '',
+    'quickPanelRightKeys':
+        quickPanelRightKeys?.map((k) => k.keyId).join(',') ?? '',
   };
 
   factory AppSettings.fromMap(Map<String, String?> m) => AppSettings(
@@ -80,15 +82,29 @@ class AppSettings {
     frameSkip: int.tryParse(m['frameSkip'] ?? '') ?? 1,
     smoothing: double.tryParse(m['smoothing'] ?? '') ?? 0.35,
     zoneWidth: double.tryParse(m['zoneWidth'] ?? '') ?? 0.15,
-    quickPanelLeftKey: _parseKey(m['quickPanelLeftKey']),
-    quickPanelRightKey: _parseKey(m['quickPanelRightKey']),
+    quickPanelLeftKeys: _parseKeys(
+      m['quickPanelLeftKeys'] ?? m['quickPanelLeftKey'],
+    ),
+    quickPanelRightKeys: _parseKeys(
+      m['quickPanelRightKeys'] ?? m['quickPanelRightKey'],
+    ),
   );
 
-  static LogicalKeyboardKey? _parseKey(String? raw) {
+  /// Parsers comma-separated IDs back into a list of keys. Handles fallback for legacy single key data.
+  static List<LogicalKeyboardKey>? _parseKeys(String? raw) {
     if (raw == null || raw.isEmpty) return null;
-    final id = int.tryParse(raw);
-    if (id == null) return null;
-    return LogicalKeyboardKey(id);
+
+    final List<LogicalKeyboardKey> keys = [];
+    final fragments = raw.split(',');
+
+    for (final fragment in fragments) {
+      final id = int.tryParse(fragment.trim());
+      if (id != null) {
+        keys.add(LogicalKeyboardKey(id));
+      }
+    }
+
+    return keys.isNotEmpty ? keys : null;
   }
 }
 

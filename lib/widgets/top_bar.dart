@@ -62,9 +62,9 @@ class _TopBarState extends State<TopBar> with SingleTickerProviderStateMixin {
   Widget build(BuildContext context) {
     return Container(
       height: 40,
-      color: ConsoleColors.panel,
       padding: const EdgeInsets.symmetric(horizontal: 16),
       decoration: const BoxDecoration(
+        color: ConsoleColors.panel,
         border: Border(bottom: BorderSide(color: ConsoleColors.border)),
       ),
       child: Row(

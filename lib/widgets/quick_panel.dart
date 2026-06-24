@@ -1,27 +1,54 @@
+// lib/widgets/quick_panel.dart
+//
+// Decoupled from AppState — all state mutations are now passed in as callbacks.
+// This makes QuickPanel work in both the main engine (HomeScreen, with AppState)
+// and the overlay engine (overlay_main, without AppState).
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:provider/provider.dart';
-import '../services/app_state.dart';
-import '../screens/home_screen.dart';
+import '../models/app_settings.dart';
 import '../models/led_colors.dart';
 import 'bottom_bar.dart';
 
-/// Which side the panel slides in from.
 enum PanelSide { left, right }
 
-/// The overlay quick-access panel — mirrors Steam Deck QAM UX.
-///
-/// Wrap your root [Scaffold] in a [Stack] and place this on top.
-/// The panel captures all d-pad/gamepad input while open; the main
-/// screen behind it is frozen.
-///
-/// Call [QuickPanelController.open] / [.close] to drive visibility,
-/// or let [HomeScreen] handle it via key events and swipe zones.
+/// Callbacks the host must supply so QuickPanel can mutate app state
+/// without knowing whether AppState or a plain local object is behind it.
+class QuickPanelCallbacks {
+  const QuickPanelCallbacks({
+    required this.onToggleService,
+    required this.onBrightnessChanged,
+    required this.onSmoothingChanged,
+    required this.onZoneWidthChanged,
+    required this.onFrameSkipChanged,
+  });
+
+  final VoidCallback onToggleService;
+  final ValueChanged<double> onBrightnessChanged;
+  final ValueChanged<double> onSmoothingChanged;
+  final ValueChanged<double> onZoneWidthChanged;
+  final ValueChanged<int> onFrameSkipChanged;
+}
+
 class QuickPanel extends StatefulWidget {
-  const QuickPanel({super.key, required this.controller, required this.side});
+  const QuickPanel({
+    super.key,
+    required this.controller,
+    required this.side,
+    required this.settings,
+    required this.callbacks,
+    required this.isRunning,
+    required this.currentColors,
+    this.onOpenChanged,
+  });
 
   final QuickPanelController controller;
   final PanelSide side;
+  final AppSettings settings;
+  final QuickPanelCallbacks callbacks;
+  final bool isRunning;
+  final LedColors currentColors;
+  final ValueChanged<bool>? onOpenChanged;
 
   @override
   State<QuickPanel> createState() => _QuickPanelState();
@@ -33,20 +60,15 @@ class _QuickPanelState extends State<QuickPanel>
   late final Animation<Offset> _slide;
   late final Animation<double> _scrim;
 
-  // ── Focus model (mirrors HomeScreen: Level 0 nav → Level 1 row → Level 2 slider) ──
-  // In the panel there is only one "section" (no nav), so we have:
-  //   Level 0  row cursor  — ↑↓ moves between rows
-  //   Level 1  slider active — ◄► adjusts
   _PanelLevel _level = _PanelLevel.row;
   int _cursorRow = 0;
 
-  // ── Slider controllers ─────────────────────────────────────────────────
   final _brightnessCtrl = SliderController();
   final _smoothingCtrl = SliderController();
   final _zoneWidthCtrl = SliderController();
   final _frameSkipCtrl = SliderController();
 
-  static const _rowCount = 4; // brightness, smoothing, zoneWidth, frameSkip
+  static const _rowCount = 4;
 
   List<SliderController> get _controllers => [
     _brightnessCtrl,
@@ -94,13 +116,17 @@ class _QuickPanelState extends State<QuickPanel>
     _level = _PanelLevel.row;
     _cursorRow = 0;
     _anim.forward();
+    widget.onOpenChanged?.call(true);
   }
 
-  void _close() => _anim.reverse();
+  void _close() {
+    _anim.reverse();
+    widget.onOpenChanged?.call(false);
+  }
 
   // ── Key handling ───────────────────────────────────────────────────────
 
-  KeyEventResult handleKey(KeyEvent event, AppState state) {
+  KeyEventResult handleKey(KeyEvent event, AppSettings settings) {
     if (!_isOpen) return KeyEventResult.ignored;
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
       return KeyEventResult.ignored;
@@ -108,7 +134,6 @@ class _QuickPanelState extends State<QuickPanel>
 
     final key = event.logicalKey;
 
-    // Close on B / Escape / Back
     if (key == LogicalKeyboardKey.gameButtonB ||
         key == LogicalKeyboardKey.escape ||
         key == LogicalKeyboardKey.browserBack) {
@@ -116,10 +141,9 @@ class _QuickPanelState extends State<QuickPanel>
       return KeyEventResult.handled;
     }
 
-    // Y — toggle service (always available)
     if (key == LogicalKeyboardKey.keyY ||
         key == LogicalKeyboardKey.gameButtonY) {
-      context.read<AppState>().toggleService();
+      widget.callbacks.onToggleService();
       return KeyEventResult.handled;
     }
 
@@ -139,7 +163,7 @@ class _QuickPanelState extends State<QuickPanel>
           setState(() => _level = _PanelLevel.slider);
           return KeyEventResult.handled;
         }
-        return KeyEventResult.handled; // swallow all keys while panel is open
+        return KeyEventResult.handled;
 
       case _PanelLevel.slider:
         if (key == LogicalKeyboardKey.arrowLeft) {
@@ -171,21 +195,17 @@ class _QuickPanelState extends State<QuickPanel>
       builder: (context, _) {
         if (_anim.value == 0) return const SizedBox.shrink();
 
-        final state = context.watch<AppState>();
         final screenW = MediaQuery.of(context).size.width;
         final panelW = screenW * 0.40;
 
         return Stack(
           children: [
-            // ── Scrim ────────────────────────────────────────────────────
             Positioned.fill(
               child: GestureDetector(
                 onTap: _close,
                 child: Container(color: Colors.black.withOpacity(_scrim.value)),
               ),
             ),
-
-            // ── Panel ────────────────────────────────────────────────────
             Positioned(
               top: 0,
               bottom: 0,
@@ -196,7 +216,10 @@ class _QuickPanelState extends State<QuickPanel>
                 position: _slide,
                 child: _PanelBody(
                   side: widget.side,
-                  state: state,
+                  settings: widget.settings,
+                  callbacks: widget.callbacks,
+                  isRunning: widget.isRunning,
+                  currentColors: widget.currentColors,
                   cursorRow: _level == _PanelLevel.row ? _cursorRow : -1,
                   activeRow: _level == _PanelLevel.slider ? _cursorRow : -1,
                   brightnessCtrl: _brightnessCtrl,
@@ -220,8 +243,6 @@ enum _PanelLevel { row, slider }
 
 // ── Controller ────────────────────────────────────────────────────────────────
 
-/// Lets [HomeScreen] open/close either panel without holding a direct
-/// reference to its State.
 class QuickPanelController {
   _QuickPanelState? _state;
 
@@ -236,10 +257,8 @@ class QuickPanelController {
   void close() => _state?._close();
   void toggle() => isOpen ? close() : open();
 
-  /// Route a key event into the panel. Returns [KeyEventResult.handled] if
-  /// the panel consumed it (i.e. was open), [KeyEventResult.ignored] if not.
-  KeyEventResult handleKey(KeyEvent event, AppState state) =>
-      _state?.handleKey(event, state) ?? KeyEventResult.ignored;
+  KeyEventResult handleKey(KeyEvent event, AppSettings settings) =>
+      _state?.handleKey(event, settings) ?? KeyEventResult.ignored;
 }
 
 // ── Panel body ────────────────────────────────────────────────────────────────
@@ -247,7 +266,10 @@ class QuickPanelController {
 class _PanelBody extends StatelessWidget {
   const _PanelBody({
     required this.side,
-    required this.state,
+    required this.settings,
+    required this.callbacks,
+    required this.isRunning,
+    required this.currentColors,
     required this.cursorRow,
     required this.activeRow,
     required this.brightnessCtrl,
@@ -258,7 +280,10 @@ class _PanelBody extends StatelessWidget {
   });
 
   final PanelSide side;
-  final AppState state;
+  final AppSettings settings;
+  final QuickPanelCallbacks callbacks;
+  final bool isRunning;
+  final LedColors currentColors;
   final int cursorRow;
   final int activeRow;
   final SliderController brightnessCtrl;
@@ -284,98 +309,77 @@ class _PanelBody extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _PanelHeader(isRunning: state.isRunning, onClose: onClose),
+          _PanelHeader(isRunning: isRunning, onClose: onClose),
           Expanded(
             child: SingleChildScrollView(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // ── Live colour preview ────────────────────────────────
-                  _ColorPreview(colors: state.currentColors),
-
-                  // ── Service toggle ─────────────────────────────────────
+                  _ColorPreview(colors: currentColors),
                   _ServiceToggle(
-                    isRunning: state.isRunning,
-                    onToggle: () => context.read<AppState>().toggleService(),
+                    isRunning: isRunning,
+                    onToggle: callbacks.onToggleService,
                   ),
-
                   const _Divider(label: 'OUTPUT'),
-
-                  // ── Brightness ─────────────────────────────────────────
                   _PanelSliderRow(
                     name: 'Brightness',
-                    value: state.settings.brightness,
+                    value: settings.brightness,
                     min: 0.05,
                     max: 1.0,
                     divisions: 19,
-                    label: '${(state.settings.brightness * 100).round()}%',
+                    label: '${(settings.brightness * 100).round()}%',
                     controller: brightnessCtrl,
                     highlighted: cursorRow == 0,
                     active: activeRow == 0,
-                    onChanged: (v) =>
-                        context.read<AppState>().updateBrightness(v),
+                    onChanged: callbacks.onBrightnessChanged,
                   ),
-
-                  // ── Smoothing ──────────────────────────────────────────
                   _PanelSliderRow(
                     name: 'Smoothing',
-                    value: state.settings.smoothing,
+                    value: settings.smoothing,
                     min: 0.0,
                     max: 0.95,
                     divisions: 19,
-                    label: state.settings.smoothing == 0.0
+                    label: settings.smoothing == 0.0
                         ? 'Off'
-                        : '${(state.settings.smoothing * 100).round()}%',
+                        : '${(settings.smoothing * 100).round()}%',
                     controller: smoothingCtrl,
                     highlighted: cursorRow == 1,
                     active: activeRow == 1,
-                    onChanged: (v) =>
-                        context.read<AppState>().updateSmoothing(v),
+                    onChanged: callbacks.onSmoothingChanged,
                   ),
-
                   const _Divider(label: 'CAPTURE'),
-
-                  // ── Zone Width ─────────────────────────────────────────
                   _PanelSliderRow(
                     name: 'Zone Width',
-                    value: state.settings.zoneWidth,
+                    value: settings.zoneWidth,
                     min: 0.05,
                     max: 0.40,
                     divisions: 7,
-                    label: '${(state.settings.zoneWidth * 100).round()}%',
+                    label: '${(settings.zoneWidth * 100).round()}%',
                     controller: zoneWidthCtrl,
                     highlighted: cursorRow == 2,
                     active: activeRow == 2,
-                    onChanged: (v) =>
-                        context.read<AppState>().updateZoneWidth(v),
+                    onChanged: callbacks.onZoneWidthChanged,
                   ),
-
                   const _Divider(label: 'PERFORMANCE'),
-
-                  // ── Frame Skip ─────────────────────────────────────────
                   _PanelSliderRow(
                     name: 'Frame Skip',
-                    value: state.settings.frameSkip.toDouble(),
+                    value: settings.frameSkip.toDouble(),
                     min: 0,
                     max: 5,
                     divisions: 5,
-                    label: state.settings.frameSkip == 0
+                    label: settings.frameSkip == 0
                         ? 'Every'
-                        : '1 in ${state.settings.frameSkip + 1}',
+                        : '1 in ${settings.frameSkip + 1}',
                     controller: frameSkipCtrl,
                     highlighted: cursorRow == 3,
                     active: activeRow == 3,
-                    onChanged: (v) =>
-                        context.read<AppState>().updateFrameSkip(v.round()),
+                    onChanged: (v) => callbacks.onFrameSkipChanged(v.round()),
                   ),
-
                   const SizedBox(height: 16),
                 ],
               ),
             ),
           ),
-
-          // ── Bottom hint ────────────────────────────────────────────────
           _PanelHint(activeRow: activeRow),
         ],
       ),
@@ -411,7 +415,6 @@ class _PanelHeader extends StatelessWidget {
             ),
           ),
           const Spacer(),
-          // Live status dot
           Container(
             width: 6,
             height: 6,
@@ -491,20 +494,15 @@ class _ColorRect extends StatelessWidget {
     required this.color,
     required this.accentColor,
   });
-
   final String label;
   final Color color;
   final Color accentColor;
 
   @override
   Widget build(BuildContext context) {
-    // Determine if the colour is dark enough to need a lighter label.
     final luma = color.red * 0.299 + color.green * 0.587 + color.blue * 0.114;
     final labelColor = luma < 80 ? accentColor : Colors.black.withOpacity(0.6);
-
-    final isBlack =
-        color == Colors.black ||
-        (color.red == 0 && color.green == 0 && color.blue == 0);
+    final isBlack = color.red == 0 && color.green == 0 && color.blue == 0;
 
     return AnimatedContainer(
       duration: const Duration(milliseconds: 80),
@@ -518,7 +516,6 @@ class _ColorRect extends StatelessWidget {
       ),
       child: Stack(
         children: [
-          // Hex readout
           if (!isBlack)
             Positioned(
               bottom: 5,
@@ -536,7 +533,6 @@ class _ColorRect extends StatelessWidget {
                 ),
               ),
             ),
-          // Zone label
           Positioned(
             top: 6,
             left: 8,
@@ -550,7 +546,6 @@ class _ColorRect extends StatelessWidget {
               ),
             ),
           ),
-          // Offline indicator
           if (isBlack)
             const Center(
               child: Text(
@@ -750,7 +745,6 @@ class _PanelSliderRowState extends State<_PanelSliderRow> {
                   ),
                 ),
               ),
-              // Value badge
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                 decoration: BoxDecoration(
@@ -812,7 +806,6 @@ class _PanelHint extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isSlider = activeRow >= 0;
-
     return Container(
       height: 32,
       padding: const EdgeInsets.symmetric(horizontal: 14),
@@ -873,7 +866,7 @@ class _MiniHint extends StatelessWidget {
   }
 }
 
-// ── Diamond thumb (panel-local copy, smaller) ─────────────────────────────────
+// ── Diamond thumb ─────────────────────────────────────────────────────────────
 
 class _PanelDiamondThumb extends SliderComponentShape {
   @override
@@ -902,7 +895,6 @@ class _PanelDiamondThumb extends SliderComponentShape {
       ..lineTo(center.dx, center.dy + half)
       ..lineTo(center.dx - half, center.dy)
       ..close();
-
     canvas.drawPath(path, Paint()..color = ConsoleColors.bg);
     canvas.drawPath(
       path,
@@ -912,4 +904,19 @@ class _PanelDiamondThumb extends SliderComponentShape {
         ..strokeWidth = 1.5,
     );
   }
+}
+
+class ConsoleColors {
+  static const bg = Color(0xFF080B12);
+  static const panel = Color(0xFF0E1320);
+  static const panel2 = Color(0xFF131826);
+  static const border = Color(0x12FFFFFF);
+  static const border2 = Color(0x1EFFFFFF);
+  static const cyan = Color(0xFF00D4FF);
+  static const cyanDim = Color(0x1F00D4FF);
+  static const cyanGlow = Color(0x0F00D4FF);
+  static const violet = Color(0xFF9B6BFF);
+  static const text = Color(0xFFE2EAF4);
+  static const text2 = Color(0xFF7A8FA8);
+  static const text3 = Color(0xFF3A4A5C);
 }

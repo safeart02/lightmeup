@@ -28,7 +28,8 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+// Added WidgetsBindingObserver so we can re-claim edges on rotation/resize
+class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   FocusLevel _level = FocusLevel.nav;
   NavSection _section = NavSection.output;
   int _cursorRow = 0;
@@ -38,10 +39,10 @@ class _HomeScreenState extends State<HomeScreen> {
   final _rightPanelCtrl = QuickPanelController();
 
   // ── Swipe detection ────────────────────────────────────────────────────
-  // Width of the invisible edge hit zone in logical pixels.
-  static const _swipeZoneWidth = 24.0;
-  // Minimum horizontal drag velocity to count as a swipe.
-  static const _swipeVelocityThreshold = 300.0;
+  // Wider zone so the hit area is comfortably reachable.
+  static const _swipeZoneWidth = 44.0;
+  // Lower threshold — edge swipes naturally have less velocity.
+  static const _swipeVelocityThreshold = 150.0;
 
   // ── Slider controllers ─────────────────────────────────────────────────
   final _brightnessCtrl = SliderController();
@@ -74,6 +75,60 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   bool get _eitherPanelOpen => _leftPanelCtrl.isOpen || _rightPanelCtrl.isOpen;
+
+  // ── Lifecycle ──────────────────────────────────────────────────────────
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    // Claim the edge strips after the first frame is laid out
+    WidgetsBinding.instance.addPostFrameCallback((_) => _claimEdges());
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  /// Re-claim edges whenever screen metrics change (rotation, etc.)
+  @override
+  void didChangeMetrics() => _claimEdges();
+
+  /// Tell Android to exclude our edge strips from its back-gesture zone.
+  void _claimEdges() {
+    if (!mounted) return;
+    final size = MediaQuery.of(context).size;
+    final dpr = MediaQuery.of(context).devicePixelRatio;
+
+    // Android caps gesture exclusion at 200dp total height per edge.
+    // Use 200dp centred vertically to maximise coverage.
+    const maxExclusionDp = 200.0;
+    final midY = size.height / 2;
+    final halfH = maxExclusionDp / 2;
+
+    // Rects must be in physical pixels.
+    final top = ((midY - halfH) * dpr).round();
+    final bottom = ((midY + halfH) * dpr).round();
+    final right = (_swipeZoneWidth * dpr).round();
+    final screenRight = (size.width * dpr).round();
+
+    SystemChannels.platform.invokeMethod<void>(
+      'SystemGestures.setSystemGestureExclusionRects',
+      <Map<String, int>>[
+        // Left edge strip
+        {'top': top, 'bottom': bottom, 'left': 0, 'right': right},
+        // Right edge strip
+        {
+          'top': top,
+          'bottom': bottom,
+          'left': screenRight - right,
+          'right': screenRight,
+        },
+      ],
+    );
+  }
 
   // ── Build ──────────────────────────────────────────────────────────────
 
@@ -149,17 +204,20 @@ class _HomeScreenState extends State<HomeScreen> {
               ],
             ),
 
-            // ── Left swipe zone (invisible) ──────────────────────────────
+            // ── Left swipe zone ──────────────────────────────────────────
+            // HitTestBehavior.opaque ensures Flutter wins the hit-test over
+            // the system gesture handler. onHorizontalDragStart claims the
+            // gesture arena early so Android can't steal it mid-drag.
             Positioned(
               left: 0,
               top: 0,
               bottom: 0,
               width: _swipeZoneWidth,
               child: GestureDetector(
-                behavior: HitTestBehavior.translucent,
+                behavior: HitTestBehavior.opaque,
+                onHorizontalDragStart: (_) {},
                 onHorizontalDragEnd: (details) {
                   final v = details.primaryVelocity ?? 0;
-                  // Swipe right from left edge → open left panel
                   if (v > _swipeVelocityThreshold && !_eitherPanelOpen) {
                     _leftPanelCtrl.open();
                     setState(() {});
@@ -168,17 +226,17 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
 
-            // ── Right swipe zone (invisible) ─────────────────────────────
+            // ── Right swipe zone ─────────────────────────────────────────
             Positioned(
               right: 0,
               top: 0,
               bottom: 0,
               width: _swipeZoneWidth,
               child: GestureDetector(
-                behavior: HitTestBehavior.translucent,
+                behavior: HitTestBehavior.opaque,
+                onHorizontalDragStart: (_) {},
                 onHorizontalDragEnd: (details) {
                   final v = details.primaryVelocity ?? 0;
-                  // Swipe left from right edge → open right panel
                   if (v < -_swipeVelocityThreshold && !_eitherPanelOpen) {
                     _rightPanelCtrl.open();
                     setState(() {});
@@ -188,10 +246,35 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
 
             // ── Left quick panel ─────────────────────────────────────────
-            QuickPanel(controller: _leftPanelCtrl, side: PanelSide.left),
-
+            QuickPanel(
+              controller: _leftPanelCtrl,
+              side: PanelSide.left,
+              settings: state.settings,
+              isRunning: state.isRunning,
+              currentColors: state.currentColors,
+              callbacks: QuickPanelCallbacks(
+                onToggleService: () => state.toggleService(),
+                onBrightnessChanged: (v) => state.updateBrightness(v),
+                onSmoothingChanged: (v) => state.updateSmoothing(v),
+                onZoneWidthChanged: (v) => state.updateZoneWidth(v),
+                onFrameSkipChanged: (v) => state.updateFrameSkip(v),
+              ),
+            ),
             // ── Right quick panel ────────────────────────────────────────
-            QuickPanel(controller: _rightPanelCtrl, side: PanelSide.right),
+            QuickPanel(
+              controller: _rightPanelCtrl,
+              side: PanelSide.right,
+              settings: state.settings,
+              isRunning: state.isRunning,
+              currentColors: state.currentColors,
+              callbacks: QuickPanelCallbacks(
+                onToggleService: () => state.toggleService(),
+                onBrightnessChanged: (v) => state.updateBrightness(v),
+                onSmoothingChanged: (v) => state.updateSmoothing(v),
+                onZoneWidthChanged: (v) => state.updateZoneWidth(v),
+                onFrameSkipChanged: (v) => state.updateFrameSkip(v),
+              ),
+            ),
           ],
         ),
       ),
@@ -243,45 +326,47 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     final key = event.logicalKey;
+    final pressed = HardwareKeyboard.instance.logicalKeysPressed;
+
+    // Helper closure to see if all configured keys are currently held down
+    bool isComboActive(List<LogicalKeyboardKey>? comboKeys) {
+      if (comboKeys == null || comboKeys.isEmpty) return false;
+      return comboKeys.every((k) => pressed.contains(k));
+    }
 
     // ── Route to open panel first — it captures everything ─────────────
     if (_leftPanelCtrl.isOpen) {
-      // Same key that opened it also closes it
-      if (key == state.settings.quickPanelLeftKey) {
+      if (isComboActive(state.settings.quickPanelLeftKeys)) {
         _leftPanelCtrl.close();
         setState(() {});
         return KeyEventResult.handled;
       }
-      return _leftPanelCtrl.handleKey(event, state);
+      return _leftPanelCtrl.handleKey(event, state.settings);
     }
 
     if (_rightPanelCtrl.isOpen) {
-      if (key == state.settings.quickPanelRightKey) {
+      if (isComboActive(state.settings.quickPanelRightKeys)) {
         _rightPanelCtrl.close();
         setState(() {});
         return KeyEventResult.handled;
       }
-      return _rightPanelCtrl.handleKey(event, state);
+      return _rightPanelCtrl.handleKey(event, state.settings);
     }
 
     // ── Assigned panel keys — open the respective panel ─────────────────
-    final leftKey = state.settings.quickPanelLeftKey;
-    final rightKey = state.settings.quickPanelRightKey;
-
-    if (leftKey != null && key == leftKey) {
+    if (isComboActive(state.settings.quickPanelLeftKeys)) {
       _leftPanelCtrl.open();
       setState(() {});
       return KeyEventResult.handled;
     }
-    if (rightKey != null && key == rightKey) {
+    if (isComboActive(state.settings.quickPanelRightKeys)) {
       _rightPanelCtrl.open();
       setState(() {});
       return KeyEventResult.handled;
     }
 
     // ── Normal main-screen routing ───────────────────────────────────────
-
-    // Y — toggle service at any level
+    // (Rest of your original routing code remains exactly the same below here...)
     if (key == LogicalKeyboardKey.keyY ||
         key == LogicalKeyboardKey.gameButtonY) {
       context.read<AppState>().toggleService();
@@ -289,7 +374,6 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     switch (_level) {
-      // ── Level 0: nav panel focused ──────────────────────────────────────
       case FocusLevel.nav:
         if (key == LogicalKeyboardKey.arrowUp) {
           _cycleSection(-1);
@@ -315,7 +399,6 @@ class _HomeScreenState extends State<HomeScreen> {
         }
         return KeyEventResult.ignored;
 
-      // ── Level 1: inside section, row cursor ─────────────────────────────
       case FocusLevel.section:
         if (key == LogicalKeyboardKey.arrowUp) {
           if (_cursorRow > 0) setState(() => _cursorRow--);
@@ -343,7 +426,6 @@ class _HomeScreenState extends State<HomeScreen> {
         }
         return KeyEventResult.ignored;
 
-      // ── Level 2: slider active ──────────────────────────────────────────
       case FocusLevel.slider:
         if (key == LogicalKeyboardKey.arrowLeft) {
           _activeControllers[_cursorRow].nudge(-1);

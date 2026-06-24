@@ -1,13 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:flutter/services.dart';
 import 'services/settings_service.dart';
-import 'package:flutter/services.dart'; 
 import 'services/lightmeup_channel.dart';
 import 'services/app_state.dart';
 import 'screens/home_screen.dart';
+import 'overlay_main.dart' as overlay;
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+  // Keep overlayMain alive in the AOT snapshot.
+  // ignore: unused_local_variable
+  final _ = overlay.overlayMain; // ← tear-off, not a call
   SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
   runApp(const LightmeupApp());
 }

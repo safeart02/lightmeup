@@ -1,3 +1,12 @@
+// lib/sections/about_section.dart — complete replacement
+//
+// Changes vs original:
+//   • Adds an "Overlay Panel" toggle row so the user can start/stop
+//     OverlayService from inside the settings screen.
+//   • Uses state.isOverlayRunning and state.toggleOverlay() — both
+//     already provided by the updated AppState.
+//   Everything else is unchanged.
+
 import 'package:flutter/material.dart';
 import '../screens/home_screen.dart';
 import '../widgets/bottom_bar.dart';
@@ -10,11 +19,101 @@ class AboutSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final captureGranted = state.isRunning;
+    final overlayRunning = state.isOverlayRunning;
 
     return SectionScaffold(
       title: 'About',
-      description: 'Service info and permissions',
+      description: 'Service info, permissions and overlay',
       children: [
+        // ── Overlay toggle ─────────────────────────────────────────────────
+        SettingGroup(
+          label: 'OVERLAY',
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 10),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Overlay Panel',
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w500,
+                            color: ConsoleColors.text,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          overlayRunning
+                              ? 'Quick panel active over other apps'
+                              : 'Show quick panel above any app',
+                          style: const TextStyle(
+                            fontSize: 10,
+                            color: ConsoleColors.text2,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  GestureDetector(
+                    onTap: () => state.toggleOverlay(),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 220),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 8,
+                      ),
+                      decoration: BoxDecoration(
+                        color: overlayRunning
+                            ? ConsoleColors.cyan.withOpacity(0.10)
+                            : Colors.transparent,
+                        border: Border.all(
+                          color: overlayRunning
+                              ? ConsoleColors.cyan.withOpacity(0.5)
+                              : ConsoleColors.border2,
+                        ),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            overlayRunning
+                                ? Icons.picture_in_picture_rounded
+                                : Icons.picture_in_picture_alt_rounded,
+                            size: 13,
+                            color: overlayRunning
+                                ? ConsoleColors.cyan
+                                : ConsoleColors.text2,
+                          ),
+                          const SizedBox(width: 7),
+                          Text(
+                            overlayRunning ? 'STOP' : 'START',
+                            style: TextStyle(
+                              fontFamily: 'monospace',
+                              fontSize: 10,
+                              letterSpacing: 1.2,
+                              fontWeight: FontWeight.w700,
+                              color: overlayRunning
+                                  ? ConsoleColors.cyan
+                                  : ConsoleColors.text2,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+
+        // ── Info ───────────────────────────────────────────────────────────
         SettingGroup(
           children: [
             Padding(
@@ -22,7 +121,6 @@ class AboutSection extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Description text
                   RichText(
                     text: TextSpan(
                       style: const TextStyle(
@@ -41,10 +139,10 @@ class AboutSection extends StatelessWidget {
                         ),
                         const TextSpan(
                           text:
-                              ' in the sidebar to grant screen capture permission.'
-                              ' The service runs in the background when you leave'
-                              ' the app, continuing to sync your LED strip to'
-                              ' on-screen content.',
+                              ' in the sidebar to grant screen capture '
+                              'permission. The service runs in the background '
+                              'when you leave the app, continuing to sync your '
+                              'LED strip to on-screen content.',
                         ),
                       ],
                     ),
@@ -52,7 +150,6 @@ class AboutSection extends StatelessWidget {
 
                   const SizedBox(height: 14),
 
-                  // Info chips row
                   Row(
                     children: [
                       _InfoChip(
@@ -67,6 +164,21 @@ class AboutSection extends StatelessWidget {
                         label: 'CAPTURE',
                         value: captureGranted ? 'Granted' : 'Not granted',
                         valueColor: captureGranted
+                            ? ConsoleColors.cyan
+                            : ConsoleColors.text,
+                      ),
+                    ],
+                  ),
+
+                  const SizedBox(height: 10),
+
+                  // Overlay permission status chip
+                  Row(
+                    children: [
+                      _InfoChip(
+                        label: 'OVERLAY',
+                        value: overlayRunning ? 'Running' : 'Off',
+                        valueColor: overlayRunning
                             ? ConsoleColors.cyan
                             : ConsoleColors.text,
                       ),

@@ -228,7 +228,7 @@ class LightmeupService : Service() {
 
             val (leftColor, rightColor) = ColorSampler.sample(cropped, zoneWidth, smoothing = 0f)
 
-            val alpha = 0.25f
+            val alpha = 0.6f
             smoothedLeft  = lerpColor(smoothedLeft,  leftColor,  alpha)
             smoothedRight = lerpColor(smoothedRight, rightColor, alpha)
 
