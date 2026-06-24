@@ -1,203 +1,294 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../services/app_state.dart';
-import '../widgets/power_button.dart';
-import '../widgets/setting_slider.dart';
-import '../widgets/zone_preview.dart';
+import '../widgets/side_nav.dart';
+import '../widgets/top_bar.dart';
+import '../widgets/bottom_bar.dart';
+import '../sections/output_section.dart';
+import '../sections/capture_section.dart';
+import '../sections/performance_section.dart';
+import '../sections/about_section.dart';
 
-class HomeScreen extends StatelessWidget {
+enum NavSection { output, capture, performance, about }
+
+/// Three-level focus model — mirrors standard console menu UX:
+///
+///   Level 0  [nav]      Left panel focused. ↑↓ pick section, A/► enter it.
+///   Level 1  [section]  Inside section. ↑↓ pick row, A enter row, ◄ back to nav.
+///   Level 2  [slider]   Slider active. ◄► adjust, A or B exit to level 1.
+enum FocusLevel { nav, section, slider }
+
+class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
+
+  @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  FocusLevel _level = FocusLevel.nav;
+  NavSection _section = NavSection.output;
+  int _cursorRow = 0; // row index within the current section
+
+  // ── Slider controllers ────────────────────────────────────────────────────
+  final _brightnessCtrl = SliderController();
+  final _smoothingCtrl = SliderController();
+  final _zoneWidthCtrl = SliderController();
+  final _frameSkipCtrl = SliderController();
+
+  static const _rowCounts = {
+    NavSection.output: 2,
+    NavSection.capture: 1,
+    NavSection.performance: 1,
+    NavSection.about: 0,
+  };
+
+  int get _rowCount => _rowCounts[_section]!;
+
+  List<SliderController> get _activeControllers {
+    switch (_section) {
+      case NavSection.output:
+        return [_brightnessCtrl, _smoothingCtrl];
+      case NavSection.capture:
+        return [_zoneWidthCtrl];
+      case NavSection.performance:
+        return [_frameSkipCtrl];
+      case NavSection.about:
+        return [];
+    }
+  }
+
+  // ── Build ─────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
-    final cs = Theme.of(context).colorScheme;
 
     if (state.isLoading) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+      return const Scaffold(
+        backgroundColor: ConsoleColors.bg,
+        body: Center(
+          child: CircularProgressIndicator(color: ConsoleColors.cyan),
+        ),
+      );
     }
 
     return Scaffold(
-      backgroundColor: cs.surface,
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        title: Row(
-          children: [
-            Icon(Icons.light_mode, color: cs.primary, size: 22),
-            const SizedBox(width: 8),
-            const Text('LightMeUp',
-                style: TextStyle(fontWeight: FontWeight.bold)),
-          ],
-        ),
-      ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+      backgroundColor: ConsoleColors.bg,
+      body: Focus(
+        autofocus: true,
+        onKeyEvent: (_, event) => _handleKey(event, state),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // ── Power toggle ──────────────────────────────────────────────
-            Center(
-              child: PowerButton(
-                isRunning: state.isRunning,
-                onTap: () => context.read<AppState>().toggleService(),
+            TopBar(
+              isRunning: state.isRunning,
+              onToggle: () => context.read<AppState>().toggleService(),
+            ),
+            Expanded(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  SideNav(
+                    selected: _section,
+                    isRunning: state.isRunning,
+                    navFocused: _level == FocusLevel.nav,
+                    onSelect: (s) => setState(() {
+                      _section = s;
+                      _level = FocusLevel.nav;
+                      _cursorRow = 0;
+                    }),
+                    onToggle: () => context.read<AppState>().toggleService(),
+                  ),
+                  Expanded(
+                    child: AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 180),
+                      switchInCurve: Curves.easeOut,
+                      switchOutCurve: Curves.easeIn,
+                      transitionBuilder: (child, anim) => FadeTransition(
+                        opacity: anim,
+                        child: SlideTransition(
+                          position: Tween<Offset>(
+                            begin: const Offset(0.02, 0),
+                            end: Offset.zero,
+                          ).animate(anim),
+                          child: child,
+                        ),
+                      ),
+                      child: _buildSection(state),
+                    ),
+                  ),
+                ],
               ),
             ),
-
-            const SizedBox(height: 8),
-
-            Center(
-              child: Text(
-                state.isRunning ? "LEDs Active" : "Service stopped",
-                style: TextStyle(
-                  color: state.isRunning ? cs.primary : cs.outline,
-                  fontSize: 13,
-                ),
-              ),
-            ),
-
-            const SizedBox(height: 32),
-
-            // ── Zone preview diagram ──────────────────────────────────────
-            _SectionHeader('Zone Preview'),
-            const SizedBox(height: 8),
-            ZonePreview(zoneWidth: state.settings.zoneWidth),
-
-            const SizedBox(height: 28),
-
-            // ── Brightness ────────────────────────────────────────────────
-            _SectionHeader('LED Brightness'),
-            SettingSlider(
-              value: state.settings.brightness,
-              min: 0.05,
-              max: 1.0,
-              divisions: 19,
-              label: '${(state.settings.brightness * 100).round()}%',
-              onChanged: (v) => context.read<AppState>().updateBrightness(v),
-            ),
-
-            const SizedBox(height: 20),
-
-            // ── Zone width ────────────────────────────────────────────────
-            _SectionHeader('Capture Zone Width'),
-            _SubLabel('Width of screen edge sampled per stick'),
-            SettingSlider(
-              value: state.settings.zoneWidth,
-              min: 0.05,
-              max: 0.40,
-              divisions: 7,
-              label: '${(state.settings.zoneWidth * 100).round()}%',
-              onChanged: (v) => context.read<AppState>().updateZoneWidth(v),
-            ),
-
-            const SizedBox(height: 20),
-
-            // ── Colour smoothing ──────────────────────────────────────────
-            _SectionHeader('Colour Smoothing'),
-            _SubLabel('Higher = smoother transitions, slower response'),
-            SettingSlider(
-              value: state.settings.smoothing,
-              min: 0.0,
-              max: 0.95,
-              divisions: 19,
-              label: state.settings.smoothing == 0.0
-                  ? 'Off'
-                  : '${(state.settings.smoothing * 100).round()}%',
-              onChanged: (v) => context.read<AppState>().updateSmoothing(v),
-            ),
-
-            const SizedBox(height: 20),
-
-            // ── Frame skip ────────────────────────────────────────────────
-            _SectionHeader('Frame Skip'),
-            _SubLabel('Process every Nth frame — higher saves battery'),
-            SettingSlider(
-              value: state.settings.frameSkip.toDouble(),
-              min: 0,
-              max: 5,
-              divisions: 5,
-              label: state.settings.frameSkip == 0
-                  ? 'Every frame'
-                  : '1 in ${state.settings.frameSkip + 1}',
-              onChanged: (v) =>
-                  context.read<AppState>().updateFrameSkip(v.round()),
-            ),
-
-            const SizedBox(height: 40),
-
-            // ── Info card ─────────────────────────────────────────────────
-            _InfoCard(),
-
-            const SizedBox(height: 24),
+            BottomBar(isRunning: state.isRunning, level: _level),
           ],
         ),
       ),
     );
   }
-}
 
-// ── Small internal widgets ──────────────────────────────────────────────────
+  Widget _buildSection(AppState state) {
+    // cursorRow and activeRow are only meaningful at level 1 / 2.
+    final cursor = _level != FocusLevel.nav ? _cursorRow : -1;
+    final active = _level == FocusLevel.slider ? _cursorRow : -1;
 
-class _SectionHeader extends StatelessWidget {
-  const _SectionHeader(this.text);
-  final String text;
+    switch (_section) {
+      case NavSection.output:
+        return OutputSection(
+          key: const ValueKey('output'),
+          state: state,
+          cursorRow: cursor,
+          activeRow: active,
+          brightnessCtrl: _brightnessCtrl,
+          smoothingCtrl: _smoothingCtrl,
+        );
+      case NavSection.capture:
+        return CaptureSection(
+          key: const ValueKey('capture'),
+          state: state,
+          cursorRow: cursor,
+          activeRow: active,
+          zoneWidthCtrl: _zoneWidthCtrl,
+        );
+      case NavSection.performance:
+        return PerformanceSection(
+          key: const ValueKey('performance'),
+          state: state,
+          cursorRow: cursor,
+          activeRow: active,
+          frameSkipCtrl: _frameSkipCtrl,
+        );
+      case NavSection.about:
+        return AboutSection(key: const ValueKey('about'), state: state);
+    }
+  }
 
-  @override
-  Widget build(BuildContext context) {
-    return Text(
-      text,
-      style: TextStyle(
-        color: Theme.of(context).colorScheme.onSurface,
-        fontWeight: FontWeight.w600,
-        fontSize: 15,
-      ),
-    );
+  // ── Key handler ───────────────────────────────────────────────────────────
+
+  KeyEventResult _handleKey(KeyEvent event, AppState state) {
+    // Handle both press and repeat so held ◄► keeps nudging.
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+      return KeyEventResult.ignored;
+    }
+
+    final key = event.logicalKey;
+
+    // Y — toggle service at any level
+    if (key == LogicalKeyboardKey.keyY ||
+        key == LogicalKeyboardKey.gameButtonY) {
+      context.read<AppState>().toggleService();
+      return KeyEventResult.handled;
+    }
+
+    switch (_level) {
+      // ── Level 0: nav panel focused ────────────────────────────────────────
+      case FocusLevel.nav:
+        if (key == LogicalKeyboardKey.arrowUp) {
+          _cycleSection(-1);
+          return KeyEventResult.handled;
+        }
+        if (key == LogicalKeyboardKey.arrowDown) {
+          _cycleSection(1);
+          return KeyEventResult.handled;
+        }
+        // A or ► — enter the section
+        if (key == LogicalKeyboardKey.gameButtonA ||
+            key == LogicalKeyboardKey.enter ||
+            key == LogicalKeyboardKey.select ||
+            key == LogicalKeyboardKey.arrowRight) {
+          if (_rowCount > 0) {
+            setState(() {
+              _level = FocusLevel.section;
+              _cursorRow = 0;
+            });
+          } else {
+            // About has no rows — just enter as a view
+            setState(() => _level = FocusLevel.section);
+          }
+          return KeyEventResult.handled;
+        }
+        return KeyEventResult.ignored;
+
+      // ── Level 1: inside section, row cursor ───────────────────────────────
+      case FocusLevel.section:
+        if (key == LogicalKeyboardKey.arrowUp) {
+          if (_cursorRow > 0) {
+            setState(() => _cursorRow--);
+          }
+          return KeyEventResult.handled;
+        }
+        if (key == LogicalKeyboardKey.arrowDown) {
+          if (_cursorRow < _rowCount - 1) {
+            setState(() => _cursorRow++);
+          }
+          return KeyEventResult.handled;
+        }
+        // A — enter slider on this row
+        if (key == LogicalKeyboardKey.gameButtonA ||
+            key == LogicalKeyboardKey.enter ||
+            key == LogicalKeyboardKey.select) {
+          if (_rowCount > 0) {
+            setState(() => _level = FocusLevel.slider);
+          }
+          return KeyEventResult.handled;
+        }
+        // B or ◄ — back to nav
+        if (key == LogicalKeyboardKey.gameButtonB ||
+            key == LogicalKeyboardKey.escape ||
+            key == LogicalKeyboardKey.browserBack ||
+            key == LogicalKeyboardKey.arrowLeft) {
+          setState(() {
+            _level = FocusLevel.nav;
+            _cursorRow = 0;
+          });
+          return KeyEventResult.handled;
+        }
+        return KeyEventResult.ignored;
+
+      // ── Level 2: slider active, ◄► adjusts ───────────────────────────────
+      case FocusLevel.slider:
+        if (key == LogicalKeyboardKey.arrowLeft) {
+          _activeControllers[_cursorRow].nudge(-1);
+          return KeyEventResult.handled;
+        }
+        if (key == LogicalKeyboardKey.arrowRight) {
+          _activeControllers[_cursorRow].nudge(1);
+          return KeyEventResult.handled;
+        }
+        // A or B — exit slider, stay on same row
+        if (key == LogicalKeyboardKey.gameButtonA ||
+            key == LogicalKeyboardKey.enter ||
+            key == LogicalKeyboardKey.select ||
+            key == LogicalKeyboardKey.gameButtonB ||
+            key == LogicalKeyboardKey.escape ||
+            key == LogicalKeyboardKey.browserBack) {
+          setState(() => _level = FocusLevel.section);
+          return KeyEventResult.handled;
+        }
+        return KeyEventResult.ignored;
+    }
+  }
+
+  void _cycleSection(int delta) {
+    final values = NavSection.values;
+    final next = (values.indexOf(_section) + delta).clamp(0, values.length - 1);
+    setState(() => _section = values[next]);
   }
 }
 
-class _SubLabel extends StatelessWidget {
-  const _SubLabel(this.text);
-  final String text;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 4),
-      child: Text(
-        text,
-        style: TextStyle(
-          color: Theme.of(context).colorScheme.outline,
-          fontSize: 12,
-        ),
-      ),
-    );
-  }
-}
-
-class _InfoCard extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: cs.surfaceContainerHigh,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(Icons.info_outline, size: 18, color: cs.primary),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              'Tap the power button to grant screen capture permission. '
-              'The service continues running when you leave the app.',
-              style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+/// Central colour palette — reference these throughout all widgets.
+class ConsoleColors {
+  static const bg = Color(0xFF080B12);
+  static const panel = Color(0xFF0E1320);
+  static const panel2 = Color(0xFF131826);
+  static const border = Color(0x12FFFFFF);
+  static const border2 = Color(0x1EFFFFFF);
+  static const cyan = Color(0xFF00D4FF);
+  static const cyanDim = Color(0x1F00D4FF);
+  static const cyanGlow = Color(0x0F00D4FF);
+  static const violet = Color(0xFF9B6BFF);
+  static const text = Color(0xFFE2EAF4);
+  static const text2 = Color(0xFF7A8FA8);
+  static const text3 = Color(0xFF3A4A5C);
 }
