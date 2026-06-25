@@ -50,6 +50,14 @@ class SideNav extends StatelessWidget {
             onTap: onSelect,
           ),
           _NavItem(
+            icon: Icons.auto_awesome_rounded,
+            label: 'Effects',
+            section: NavSection.effects,
+            selected: selected,
+            navFocused: navFocused,
+            onTap: onSelect,
+          ),
+          _NavItem(
             icon: Icons.crop_free_rounded,
             label: 'Capture',
             section: NavSection.capture,

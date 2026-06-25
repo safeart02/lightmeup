@@ -2,6 +2,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
 import '../models/app_settings.dart';
 import '../models/led_colors.dart';
+import '../models/led_effect.dart';
 
 /// Thin wrapper around the MethodChannel + EventChannel that talks to
 /// [LightmeupService] on the native (Kotlin) side.
@@ -16,12 +17,6 @@ class LightmeupChannel {
 
   // ── Colour stream ──────────────────────────────────────────────────────
 
-  /// Broadcasts the current left/right LED colours as computed by the native
-  /// service. Events are already throttled to ~15 fps on the Kotlin side.
-  ///
-  /// Emits [LedColors.black] as a sentinel when the service stops.
-  /// The stream stays alive across start/stop cycles — callers should not
-  /// cancel and re-subscribe; just let it run and react to values.
   Stream<LedColors> get colorStream => _eventChannel
       .receiveBroadcastStream()
       .where((event) => event is Map)
@@ -29,13 +24,13 @@ class LightmeupChannel {
 
   // ── Service control ────────────────────────────────────────────────────
 
-  /// Ask the user for MediaProjection permission and start the capture loop.
   Future<bool> startService(AppSettings settings) async {
     try {
       debugPrint(
         '[LightmeupChannel] calling startService with: '
         'brightness=${settings.brightness}, frameSkip=${settings.frameSkip}, '
-        'smoothing=${settings.smoothing}, zoneWidth=${settings.zoneWidth}',
+        'smoothing=${settings.smoothing}, zoneWidth=${settings.zoneWidth}, '
+        'effect=${settings.ledEffect.name}',
       );
 
       final result = await _methodChannel.invokeMethod<bool>('startService', {
@@ -43,6 +38,8 @@ class LightmeupChannel {
         'frameSkip': settings.frameSkip,
         'smoothing': settings.smoothing,
         'zoneWidth': settings.zoneWidth,
+        // Send effect config at start so the service knows what mode to run.
+        ...settings.effectConfig.toChannelMap(settings.ledEffect),
       });
 
       debugPrint('[LightmeupChannel] startService returned: $result');
@@ -71,7 +68,6 @@ class LightmeupChannel {
     }
   }
 
-  /// Stop the capture loop and restore LEDs to a neutral state.
   Future<void> stopService() async {
     try {
       await _methodChannel.invokeMethod('stopService');
@@ -80,7 +76,6 @@ class LightmeupChannel {
     }
   }
 
-  /// Push updated settings to the already-running service (no restart needed).
   Future<void> updateSettings(AppSettings settings) async {
     try {
       await _methodChannel.invokeMethod('updateSettings', {
@@ -91,6 +86,19 @@ class LightmeupChannel {
       });
     } on PlatformException catch (e) {
       debugPrint('updateSettings error: ${e.message}');
+    }
+  }
+
+  /// Push a live effect change to the running service without restarting.
+  Future<void> updateEffect(LedEffectMode mode, LedEffectConfig config) async {
+    try {
+      debugPrint('[LightmeupChannel] updateEffect: ${mode.name}');
+      await _methodChannel.invokeMethod(
+        'updateEffect',
+        config.toChannelMap(mode),
+      );
+    } on PlatformException catch (e) {
+      debugPrint('updateEffect error: ${e.message}');
     }
   }
 }

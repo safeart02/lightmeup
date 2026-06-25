@@ -11,8 +11,9 @@ import '../sections/capture_section.dart';
 import '../sections/performance_section.dart';
 import '../sections/about_section.dart';
 import '../sections/control_section.dart';
+import '../sections/effects_section.dart';
 
-enum NavSection { output, capture, performance, controls, about }
+enum NavSection { output, effects, capture, performance, controls, about }
 
 /// Three-level focus model — mirrors standard console menu UX:
 ///
@@ -38,9 +39,7 @@ class _HomeScreenState extends State<HomeScreen> {
   final _rightPanelCtrl = QuickPanelController();
 
   // ── Swipe detection ────────────────────────────────────────────────────
-  // Width of the invisible edge hit zone in logical pixels.
   static const _swipeZoneWidth = 24.0;
-  // Minimum horizontal drag velocity to count as a swipe.
   static const _swipeVelocityThreshold = 300.0;
 
   // ── Slider controllers ─────────────────────────────────────────────────
@@ -51,6 +50,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   static const _rowCounts = {
     NavSection.output: 2,
+    NavSection.effects: 0,
     NavSection.capture: 1,
     NavSection.performance: 1,
     NavSection.controls: 0,
@@ -67,6 +67,7 @@ class _HomeScreenState extends State<HomeScreen> {
         return [_zoneWidthCtrl];
       case NavSection.performance:
         return [_frameSkipCtrl];
+      case NavSection.effects:
       case NavSection.controls:
       case NavSection.about:
         return [];
@@ -159,7 +160,6 @@ class _HomeScreenState extends State<HomeScreen> {
                 behavior: HitTestBehavior.translucent,
                 onHorizontalDragEnd: (details) {
                   final v = details.primaryVelocity ?? 0;
-                  // Swipe right from left edge → open left panel
                   if (v > _swipeVelocityThreshold && !_eitherPanelOpen) {
                     _leftPanelCtrl.open();
                     setState(() {});
@@ -178,7 +178,6 @@ class _HomeScreenState extends State<HomeScreen> {
                 behavior: HitTestBehavior.translucent,
                 onHorizontalDragEnd: (details) {
                   final v = details.primaryVelocity ?? 0;
-                  // Swipe left from right edge → open right panel
                   if (v < -_swipeVelocityThreshold && !_eitherPanelOpen) {
                     _rightPanelCtrl.open();
                     setState(() {});
@@ -212,6 +211,8 @@ class _HomeScreenState extends State<HomeScreen> {
           brightnessCtrl: _brightnessCtrl,
           smoothingCtrl: _smoothingCtrl,
         );
+      case NavSection.effects:
+        return EffectsSection(key: const ValueKey('effects'), state: state);
       case NavSection.capture:
         return CaptureSection(
           key: const ValueKey('capture'),
@@ -244,9 +245,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     final key = event.logicalKey;
 
-    // ── Route to open panel first — it captures everything ─────────────
     if (_leftPanelCtrl.isOpen) {
-      // Same key that opened it also closes it
       if (key == state.settings.quickPanelLeftKey) {
         _leftPanelCtrl.close();
         setState(() {});
@@ -264,7 +263,6 @@ class _HomeScreenState extends State<HomeScreen> {
       return _rightPanelCtrl.handleKey(event, state);
     }
 
-    // ── Assigned panel keys — open the respective panel ─────────────────
     final leftKey = state.settings.quickPanelLeftKey;
     final rightKey = state.settings.quickPanelRightKey;
 
@@ -279,8 +277,6 @@ class _HomeScreenState extends State<HomeScreen> {
       return KeyEventResult.handled;
     }
 
-    // ── Normal main-screen routing ───────────────────────────────────────
-
     // Y — toggle service at any level
     if (key == LogicalKeyboardKey.keyY ||
         key == LogicalKeyboardKey.gameButtonY) {
@@ -289,7 +285,6 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     switch (_level) {
-      // ── Level 0: nav panel focused ──────────────────────────────────────
       case FocusLevel.nav:
         if (key == LogicalKeyboardKey.arrowUp) {
           _cycleSection(-1);
@@ -315,7 +310,6 @@ class _HomeScreenState extends State<HomeScreen> {
         }
         return KeyEventResult.ignored;
 
-      // ── Level 1: inside section, row cursor ─────────────────────────────
       case FocusLevel.section:
         if (key == LogicalKeyboardKey.arrowUp) {
           if (_cursorRow > 0) setState(() => _cursorRow--);
@@ -343,7 +337,6 @@ class _HomeScreenState extends State<HomeScreen> {
         }
         return KeyEventResult.ignored;
 
-      // ── Level 2: slider active ──────────────────────────────────────────
       case FocusLevel.slider:
         if (key == LogicalKeyboardKey.arrowLeft) {
           _activeControllers[_cursorRow].nudge(-1);

@@ -16,7 +16,7 @@ import io.flutter.plugin.common.MethodChannel
 class MainActivity : FlutterFragmentActivity() {
 
     companion object {
-        private const val TAG           = "MainActivity"
+        private const val TAG            = "MainActivity"
         private const val METHOD_CHANNEL = "com.example.lightmeup/lightmeup"
         private const val EVENT_CHANNEL  = "com.example.lightmeup/colors"
     }
@@ -24,12 +24,15 @@ class MainActivity : FlutterFragmentActivity() {
     private lateinit var projectionManager: MediaProjectionManager
 
     private var pendingResult: MethodChannel.Result? = null
-    private var pendingBrightness = 0.6f
-    private var pendingFrameSkip  = 1
-    private var pendingSmoothing  = 0.35f
-    private var pendingZoneWidth  = 0.15f
+    private var pendingBrightness  = 0.6f
+    private var pendingFrameSkip   = 1
+    private var pendingSmoothing   = 0.35f
+    private var pendingZoneWidth   = 0.15f
 
-    // ── Activity Result Launchers ─────────────────────────────────────────
+    // Cached pending effect map so we can forward it in the start intent.
+    private var pendingEffectArgs: Map<String, Any?> = emptyMap()
+
+    // ── Activity Result Launchers ──────────────────────────────────────────
 
     private val writeSettingsLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -38,7 +41,7 @@ class MainActivity : FlutterFragmentActivity() {
             Log.i(TAG, "WRITE_SETTINGS granted")
             requestProjectionPermission()
         } else {
-            Log.e(TAG, "WRITE_SETTINGS denied by user")
+            Log.e(TAG, "WRITE_SETTINGS denied")
             pendingResult?.success(false)
             pendingResult = null
         }
@@ -48,26 +51,48 @@ class MainActivity : FlutterFragmentActivity() {
         ActivityResultContracts.StartActivityForResult()
     ) { result: ActivityResult ->
         if (result.resultCode == Activity.RESULT_OK && result.data != null) {
-            Log.i(TAG, "MediaProjection permission granted")
-            val serviceIntent = Intent(this, LightmeupService::class.java).apply {
+            Log.i(TAG, "MediaProjection granted")
+            val si = Intent(this, LightmeupService::class.java).apply {
                 putExtra(LightmeupService.EXTRA_RESULT_CODE, result.resultCode)
                 putExtra(LightmeupService.EXTRA_DATA, result.data)
                 putExtra(LightmeupService.EXTRA_BRIGHTNESS, pendingBrightness)
                 putExtra(LightmeupService.EXTRA_FRAME_SKIP, pendingFrameSkip)
-                putExtra(LightmeupService.EXTRA_SMOOTHING, pendingSmoothing)
+                putExtra(LightmeupService.EXTRA_SMOOTHING,  pendingSmoothing)
                 putExtra(LightmeupService.EXTRA_ZONE_WIDTH, pendingZoneWidth)
+
+                // Forward effect parameters
+                putExtra(LightmeupService.EXTRA_EFFECT_MODE,
+                    pendingEffectArgs["mode"] as? String ?: "ambientSync")
+                putExtra(LightmeupService.EXTRA_PRIMARY_COLOR,
+                    (pendingEffectArgs["primaryColor"] as? Int) ?: -1)
+                putExtra(LightmeupService.EXTRA_SECONDARY_COLOR,
+                    (pendingEffectArgs["secondaryColor"] as? Int) ?: -1)
+                putExtra(LightmeupService.EXTRA_SPEED,
+                    ((pendingEffectArgs["speed"] as? Double) ?: 0.5).toFloat())
+                putExtra(LightmeupService.EXTRA_DUTY_CYCLE,
+                    ((pendingEffectArgs["dutyCycle"] as? Double) ?: 0.5).toFloat())
+                putExtra(LightmeupService.EXTRA_MIRROR_SIDES,
+                    (pendingEffectArgs["mirrorSides"] as? Boolean) ?: true)
+
+                @Suppress("UNCHECKED_CAST")
+                val cycles = pendingEffectArgs["cycleColors"] as? List<Int>
+                if (cycles != null) {
+                    putIntegerArrayListExtra(
+                        LightmeupService.EXTRA_CYCLE_COLORS,
+                        ArrayList(cycles)
+                    )
+                }
             }
-            startForegroundService(serviceIntent)
+            startForegroundService(si)
             android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
                 pendingResult?.success(LightmeupService.isRunning)
                 pendingResult = null
             }, 500)
-            return@registerForActivityResult
         } else {
-            Log.e(TAG, "MediaProjection denied (resultCode=${result.resultCode})")
+            Log.e(TAG, "MediaProjection denied")
             pendingResult?.success(false)
+            pendingResult = null
         }
-        pendingResult = null
     }
 
     // ── Flutter Engine ─────────────────────────────────────────────────────
@@ -76,26 +101,18 @@ class MainActivity : FlutterFragmentActivity() {
         super.configureFlutterEngine(flutterEngine)
 
         pendingResult = null
+        projectionManager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
 
-        projectionManager = getSystemService(MEDIA_PROJECTION_SERVICE)
-            as MediaProjectionManager
-
-        // ── MethodChannel (unchanged) ──────────────────────────────────────
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, METHOD_CHANNEL)
             .setMethodCallHandler { call, result ->
                 when (call.method) {
 
                     "startService" -> {
                         if (LightmeupService.isRunning) {
-                            Log.d(TAG, "startService: already running")
                             result.success(true)
                             return@setMethodCallHandler
                         }
-
-                        if (pendingResult != null) {
-                            Log.w(TAG, "Dropping stale pendingResult")
-                            pendingResult = null
-                        }
+                        if (pendingResult != null) pendingResult = null
 
                         pendingBrightness = (call.argument<Double>("brightness") ?: 0.6).toFloat()
                         pendingFrameSkip  = call.argument<Int>("frameSkip") ?: 1
@@ -103,8 +120,10 @@ class MainActivity : FlutterFragmentActivity() {
                         pendingZoneWidth  = (call.argument<Double>("zoneWidth") ?: 0.15).toFloat()
                         pendingResult     = result
 
+                        // Capture any effect args bundled with startService
+                        pendingEffectArgs = call.arguments<Map<String, Any?>>() ?: emptyMap()
+
                         if (!Settings.System.canWrite(this)) {
-                            Log.d(TAG, "Launching WRITE_SETTINGS request")
                             writeSettingsLauncher.launch(
                                 Intent(
                                     Settings.ACTION_MANAGE_WRITE_SETTINGS,
@@ -112,13 +131,11 @@ class MainActivity : FlutterFragmentActivity() {
                                 )
                             )
                         } else {
-                            Log.d(TAG, "WRITE_SETTINGS OK, launching projection request")
                             requestProjectionPermission()
                         }
                     }
 
                     "stopService" -> {
-                        Log.d(TAG, "stopService called")
                         stopService(Intent(this, LightmeupService::class.java))
                         android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
                             result.success(null)
@@ -135,37 +152,35 @@ class MainActivity : FlutterFragmentActivity() {
                         result.success(null)
                     }
 
-                    "isRunning" -> {
-                        val running = LightmeupService.isRunning
-                        Log.d(TAG, "isRunning: $running")
-                        result.success(running)
+                    "updateEffect" -> {
+                        @Suppress("UNCHECKED_CAST")
+                        val args = call.arguments<Map<String, Any?>>() ?: emptyMap()
+                        Log.d(TAG, "updateEffect: mode=${args["mode"]}")
+                        LightmeupService.instance?.updateEffect(args)
+                            ?: Log.d(TAG, "updateEffect: service not running")
+                        result.success(null)
                     }
+
+                    "isRunning" -> result.success(LightmeupService.isRunning)
 
                     else -> result.notImplemented()
                 }
             }
 
-        // ── EventChannel — streams LED colours to Flutter ──────────────────
-        // The sink is stored on LightmeupService.colorSink so the capture
-        // thread (via mainHandler.post) can reach it without a circular ref.
         EventChannel(flutterEngine.dartExecutor.binaryMessenger, EVENT_CHANNEL)
             .setStreamHandler(object : EventChannel.StreamHandler {
                 override fun onListen(arguments: Any?, sink: EventChannel.EventSink) {
-                    Log.i(TAG, "EventChannel: Flutter is listening for colours")
+                    Log.i(TAG, "EventChannel: listening")
                     LightmeupService.colorSink = sink
                 }
-
                 override fun onCancel(arguments: Any?) {
-                    Log.i(TAG, "EventChannel: Flutter cancelled colour stream")
+                    Log.i(TAG, "EventChannel: cancelled")
                     LightmeupService.colorSink = null
                 }
             })
     }
 
-    // ── Helpers ────────────────────────────────────────────────────────────
-
     private fun requestProjectionPermission() {
-        Log.d(TAG, "Launching screen capture intent")
         projectionLauncher.launch(projectionManager.createScreenCaptureIntent())
     }
 }
