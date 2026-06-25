@@ -48,6 +48,12 @@ class QuickPanel extends StatefulWidget {
   final QuickPanelCallbacks callbacks;
   final bool isRunning;
   final LedColors currentColors;
+
+  /// Called with true when the open animation STARTS.
+  /// Called with false when the close animation ENDS (anim value reaches 0).
+  /// This distinction matters for the overlay: the window must stay in
+  /// WindowManager until the close animation finishes, not be removed the
+  /// instant _close() is called.
   final ValueChanged<bool>? onOpenChanged;
 
   @override
@@ -100,12 +106,26 @@ class _QuickPanelState extends State<QuickPanel>
       end: 0.55,
     ).animate(CurvedAnimation(parent: _anim, curve: Curves.easeOut));
 
+    // FIX: use an AnimationStatus listener so onOpenChanged(false) fires only
+    // when the reverse animation fully completes (status == dismissed), not
+    // the instant _close() is called.  This keeps the panel window in
+    // WindowManager until the slide-out is done.
+    _anim.addStatusListener(_onAnimStatus);
+
     widget.controller._attach(this);
+  }
+
+  void _onAnimStatus(AnimationStatus status) {
+    if (status == AnimationStatus.dismissed) {
+      // Close animation finished — safe for the host to remove the window.
+      widget.onOpenChanged?.call(false);
+    }
   }
 
   @override
   void dispose() {
     widget.controller._detach(this);
+    _anim.removeStatusListener(_onAnimStatus);
     _anim.dispose();
     super.dispose();
   }
@@ -116,12 +136,15 @@ class _QuickPanelState extends State<QuickPanel>
     _level = _PanelLevel.row;
     _cursorRow = 0;
     _anim.forward();
+    // Notify immediately on open so the host can make the window focusable
+    // after the first frame.
     widget.onOpenChanged?.call(true);
   }
 
   void _close() {
+    // Just start the reverse animation.  onOpenChanged(false) fires via the
+    // status listener when the animation reaches 0, not here.
     _anim.reverse();
-    widget.onOpenChanged?.call(false);
   }
 
   // ── Key handling ───────────────────────────────────────────────────────
@@ -197,6 +220,10 @@ class _QuickPanelState extends State<QuickPanel>
 
         final screenW = MediaQuery.of(context).size.width;
         final panelW = screenW * 0.40;
+        
+        debugPrint(
+          '[panel] screenW=$screenW panelW=$panelW anim=${_anim.value}',
+        );
 
         return Stack(
           children: [
@@ -246,15 +273,38 @@ enum _PanelLevel { row, slider }
 class QuickPanelController {
   _QuickPanelState? _state;
 
-  void _attach(_QuickPanelState s) => _state = s;
+  void _attach(_QuickPanelState s) {
+    _state = s;
+    try {
+      final side = s.widget.side == PanelSide.left ? 'left' : 'right';
+      // ignore: avoid_print
+      print('QuickPanelController attached: $side');
+    } catch (_) {}
+  }
+
   void _detach(_QuickPanelState s) {
     if (_state == s) _state = null;
+    try {
+      final side = s.widget.side == PanelSide.left ? 'left' : 'right';
+      // ignore: avoid_print
+      print('QuickPanelController detached: $side');
+    } catch (_) {}
   }
 
   bool get isOpen => _state?._isOpen ?? false;
 
-  void open() => _state?._open();
-  void close() => _state?._close();
+  void open() {
+    // ignore: avoid_print
+    print('QuickPanelController.open() called; attached=${_state != null}');
+    _state?._open();
+  }
+
+  void close() {
+    // ignore: avoid_print
+    print('QuickPanelController.close() called; attached=${_state != null}');
+    _state?._close();
+  }
+
   void toggle() => isOpen ? close() : open();
 
   KeyEventResult handleKey(KeyEvent event, AppSettings settings) =>
