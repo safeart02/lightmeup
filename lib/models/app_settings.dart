@@ -1,4 +1,5 @@
 import 'package:flutter/services.dart';
+import 'led_effect.dart';
 
 /// All user-configurable settings. Serialised to/from flutter_secure_storage.
 class AppSettings {
@@ -26,6 +27,12 @@ class AppSettings {
   /// Null = no key assigned (swipe-only).
   final LogicalKeyboardKey? quickPanelRightKey;
 
+  /// Active LED effect mode.
+  final LedEffectMode ledEffect;
+
+  /// Per-mode configuration (colors, speed, etc.)
+  final LedEffectConfig effectConfig;
+
   const AppSettings({
     this.serviceEnabled = false,
     this.brightness = 0.6,
@@ -34,6 +41,8 @@ class AppSettings {
     this.zoneWidth = 0.15,
     this.quickPanelLeftKey,
     this.quickPanelRightKey,
+    this.ledEffect = LedEffectMode.ambientSync,
+    this.effectConfig = const LedEffectConfig(),
   });
 
   AppSettings copyWith({
@@ -42,9 +51,10 @@ class AppSettings {
     int? frameSkip,
     double? smoothing,
     double? zoneWidth,
-    // Use a sentinel to distinguish "set to null" from "leave unchanged".
     Object? quickPanelLeftKey = _keep,
     Object? quickPanelRightKey = _keep,
+    LedEffectMode? ledEffect,
+    LedEffectConfig? effectConfig,
   }) {
     return AppSettings(
       serviceEnabled: serviceEnabled ?? this.serviceEnabled,
@@ -58,6 +68,8 @@ class AppSettings {
       quickPanelRightKey: quickPanelRightKey == _keep
           ? this.quickPanelRightKey
           : quickPanelRightKey as LogicalKeyboardKey?,
+      ledEffect: ledEffect ?? this.ledEffect,
+      effectConfig: effectConfig ?? this.effectConfig,
     );
   }
 
@@ -69,9 +81,10 @@ class AppSettings {
     'frameSkip': frameSkip.toString(),
     'smoothing': smoothing.toString(),
     'zoneWidth': zoneWidth.toString(),
-    // Store as keyId int string, empty string = not assigned.
     'quickPanelLeftKey': quickPanelLeftKey?.keyId.toString() ?? '',
     'quickPanelRightKey': quickPanelRightKey?.keyId.toString() ?? '',
+    'ledEffect': ledEffect.name,
+    'effectConfig': effectConfig.toJson(),
   };
 
   factory AppSettings.fromMap(Map<String, String?> m) => AppSettings(
@@ -82,6 +95,10 @@ class AppSettings {
     zoneWidth: double.tryParse(m['zoneWidth'] ?? '') ?? 0.15,
     quickPanelLeftKey: _parseKey(m['quickPanelLeftKey']),
     quickPanelRightKey: _parseKey(m['quickPanelRightKey']),
+    ledEffect: _parseEffect(m['ledEffect']),
+    effectConfig: m['effectConfig'] != null && m['effectConfig']!.isNotEmpty
+        ? LedEffectConfig.fromJson(m['effectConfig']!)
+        : const LedEffectConfig(),
   );
 
   static LogicalKeyboardKey? _parseKey(String? raw) {
@@ -89,6 +106,14 @@ class AppSettings {
     final id = int.tryParse(raw);
     if (id == null) return null;
     return LogicalKeyboardKey(id);
+  }
+
+  static LedEffectMode _parseEffect(String? raw) {
+    if (raw == null) return LedEffectMode.ambientSync;
+    return LedEffectMode.values.firstWhere(
+      (e) => e.name == raw,
+      orElse: () => LedEffectMode.ambientSync,
+    );
   }
 }
 

@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'services/settings_service.dart';
-import 'package:flutter/services.dart'; 
+import 'package:flutter/services.dart';
 import 'services/lightmeup_channel.dart';
 import 'services/app_state.dart';
 import 'screens/home_screen.dart';
@@ -31,7 +31,12 @@ class LightmeupApp extends StatelessWidget {
             brightness: Brightness.dark,
           ),
           useMaterial3: true,
+          focusColor: Colors.transparent,
+          highlightColor: Colors.transparent,
+          splashColor: Colors.transparent,
+          hoverColor: Colors.transparent,
         ),
+        // ✅ Remove the builder wrapper that was stealing the first keypress
         home: const HomeScreen(),
       ),
     );

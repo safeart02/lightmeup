@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../screens/home_screen.dart';
+import '../services/haptic_service.dart';
 
 class TopBar extends StatefulWidget {
   const TopBar({super.key, required this.isRunning, required this.onToggle});
@@ -99,7 +101,14 @@ class _TopBarState extends State<TopBar> with SingleTickerProviderStateMixin {
 
           // Status pill — tappable
           GestureDetector(
-            onTap: widget.onToggle,
+            onTap: () {
+              if (widget.isRunning) {
+                HapticService.serviceOff();
+              } else {
+                HapticService.serviceOn();
+              }
+              widget.onToggle();
+            },
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 250),
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),

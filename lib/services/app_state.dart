@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../models/app_settings.dart';
 import '../models/led_colors.dart';
+import '../models/led_effect.dart';
 import 'settings_service.dart';
 import 'lightmeup_channel.dart';
 
@@ -42,16 +43,10 @@ class AppState extends ChangeNotifier {
     }
     _isLoading = false;
 
-    // Subscribe to the colour stream unconditionally — the native side only
-    // emits when the service is running, so we don't need to start/stop the
-    // subscription with the service.
-    _colorSub = _channel.colorStream.listen(
-      (colors) {
-        _currentColors = colors;
-        notifyListeners();
-      },
-      onError: (e) => debugPrint('[AppState] colorStream error: $e'),
-    );
+    _colorSub = _channel.colorStream.listen((colors) {
+      _currentColors = colors;
+      notifyListeners();
+    }, onError: (e) => debugPrint('[AppState] colorStream error: $e'));
 
     notifyListeners();
   }
@@ -70,7 +65,7 @@ class AppState extends ChangeNotifier {
       await _channel.stopService();
       _isRunning = false;
       _settings = _settings.copyWith(serviceEnabled: false);
-      _currentColors = LedColors.black; // reset preview when stopped
+      _currentColors = LedColors.black;
     } else {
       final started = await _channel.startService(_settings);
       debugPrint('[AppState] startService returned: $started');
@@ -84,10 +79,8 @@ class AppState extends ChangeNotifier {
 
   // ── Settings mutations ─────────────────────────────────────────────────
 
-  Future<void> updateBrightness(double value) => _update(
-    _settings.copyWith(brightness: value),
-    push: true,
-  );
+  Future<void> updateBrightness(double value) =>
+      _update(_settings.copyWith(brightness: value), push: true);
 
   Future<void> updateFrameSkip(int value) =>
       _update(_settings.copyWith(frameSkip: value), push: true);
@@ -100,15 +93,36 @@ class AppState extends ChangeNotifier {
 
   // ── Key binding mutations ──────────────────────────────────────────────
 
-  /// Assign [key] as the trigger for the left quick panel.
-  /// Pass null to clear the binding.
   Future<void> setQuickPanelLeftKey(LogicalKeyboardKey? key) =>
       _update(_settings.copyWith(quickPanelLeftKey: key));
 
-  /// Assign [key] as the trigger for the right quick panel.
-  /// Pass null to clear the binding.
   Future<void> setQuickPanelRightKey(LogicalKeyboardKey? key) =>
       _update(_settings.copyWith(quickPanelRightKey: key));
+
+  // ── Effect mutations ───────────────────────────────────────────────────
+
+  /// Change the active LED effect mode. Pushes to the service immediately
+  /// if it's running.
+  Future<void> setLedEffect(LedEffectMode mode) async {
+    final next = _settings.copyWith(ledEffect: mode);
+    _settings = next;
+    await _settingsService.save(_settings);
+    if (_isRunning) {
+      await _channel.updateEffect(_settings.ledEffect, _settings.effectConfig);
+    }
+    notifyListeners();
+  }
+
+  /// Update effect config (color, speed, etc.). Pushes live if running.
+  Future<void> updateEffectConfig(LedEffectConfig config) async {
+    final next = _settings.copyWith(effectConfig: config);
+    _settings = next;
+    await _settingsService.save(_settings);
+    if (_isRunning) {
+      await _channel.updateEffect(_settings.ledEffect, _settings.effectConfig);
+    }
+    notifyListeners();
+  }
 
   // ── Internal ───────────────────────────────────────────────────────────
 

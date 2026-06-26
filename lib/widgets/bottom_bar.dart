@@ -1,21 +1,15 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../screens/home_screen.dart';
+import '../services/haptic_service.dart';
 
-// ── Bottom hint bar ───────────────────────────────────────────────────────────
+// ── Bottom hint bar ────────────────────────────────────────────────────────────
 
 class BottomBar extends StatelessWidget {
-  const BottomBar({
-    super.key,
-    required this.isRunning,
-    required this.level,
-    this.panelOpen = false,
-  });
+  const BottomBar({super.key, required this.isRunning, required this.level});
 
   final bool isRunning;
   final FocusLevel level;
-
-  /// True when either quick panel is open — switches hints to panel context.
-  final bool panelOpen;
 
   @override
   Widget build(BuildContext context) {
@@ -30,43 +24,32 @@ class BottomBar extends StatelessWidget {
         children: [
           AnimatedSwitcher(
             duration: const Duration(milliseconds: 150),
-            child: panelOpen
-                // ── Panel-open hints ───────────────────────────────────────
-                ? _HintRow(
-                    key: const ValueKey('panel'),
-                    hints: const [
-                      _HintData('↑↓', 'Select'),
-                      _HintData('A', 'Adjust'),
-                      _HintData('B', 'Close panel'),
-                    ],
-                  )
-                // ── Normal hints ───────────────────────────────────────────
-                : switch (level) {
-                    FocusLevel.nav => _HintRow(
-                      key: const ValueKey('nav'),
-                      hints: const [
-                        _HintData('↑↓', 'Choose section'),
-                        _HintData('A / ►', 'Enter'),
-                        _HintData('Y', 'Toggle service'),
-                      ],
-                    ),
-                    FocusLevel.section => _HintRow(
-                      key: const ValueKey('section'),
-                      hints: const [
-                        _HintData('↑↓', 'Choose setting'),
-                        _HintData('A', 'Adjust'),
-                        _HintData('B / ◄', 'Back'),
-                      ],
-                    ),
-                    FocusLevel.slider => _HintRow(
-                      key: const ValueKey('slider'),
-                      hints: const [
-                        _HintData('◄►', 'Change value'),
-                        _HintData('A / B', 'Confirm'),
-                        _HintData('Y', 'Toggle service'),
-                      ],
-                    ),
-                  },
+            child: switch (level) {
+              FocusLevel.nav => _HintRow(
+                key: const ValueKey('nav'),
+                hints: const [
+                  _HintData('↑↓', 'Choose section'),
+                  _HintData('A / ►', 'Enter'),
+                  _HintData('Y', 'Toggle service'),
+                ],
+              ),
+              FocusLevel.section => _HintRow(
+                key: const ValueKey('section'),
+                hints: const [
+                  _HintData('↑↓', 'Choose setting'),
+                  _HintData('A', 'Adjust'),
+                  _HintData('B / ◄', 'Back'),
+                ],
+              ),
+              FocusLevel.slider => _HintRow(
+                key: const ValueKey('slider'),
+                hints: const [
+                  _HintData('◄►', 'Change value'),
+                  _HintData('A / B', 'Confirm'),
+                  _HintData('Y', 'Toggle service'),
+                ],
+              ),
+            },
           ),
           const Spacer(),
           Container(width: 1, height: 14, color: ConsoleColors.border2),
@@ -152,7 +135,7 @@ class _Hint extends StatelessWidget {
   }
 }
 
-// ── Section scaffold ──────────────────────────────────────────────────────────
+// ── Section scaffold ───────────────────────────────────────────────────────────
 
 class SectionScaffold extends StatelessWidget {
   const SectionScaffold({
@@ -212,7 +195,7 @@ class SectionScaffold extends StatelessWidget {
   }
 }
 
-// ── Setting group ─────────────────────────────────────────────────────────────
+// ── Setting group ──────────────────────────────────────────────────────────────
 
 class SettingGroup extends StatelessWidget {
   const SettingGroup({super.key, this.label, required this.children});
@@ -250,10 +233,9 @@ class SettingGroup extends StatelessWidget {
   }
 }
 
-// ── Slider controller ─────────────────────────────────────────────────────────
+// ── Slider controller ──────────────────────────────────────────────────────────
 
 /// Callback-based controller so it can be used across files.
-/// attach() / detach() are public because Dart's _ prefix is file-private.
 class SliderController {
   void Function(int)? _nudgeCallback;
 
@@ -263,7 +245,7 @@ class SliderController {
   void nudge(int direction) => _nudgeCallback?.call(direction);
 }
 
-// ── Setting row ───────────────────────────────────────────────────────────────
+// ── Setting row ────────────────────────────────────────────────────────────────
 
 class SettingRow extends StatelessWidget {
   const SettingRow({
@@ -338,7 +320,7 @@ class SettingRow extends StatelessWidget {
   }
 }
 
-// ── Console slider ────────────────────────────────────────────────────────────
+// ── Console slider ─────────────────────────────────────────────────────────────
 
 class ConsoleSlider extends StatefulWidget {
   const ConsoleSlider({
@@ -396,9 +378,16 @@ class _ConsoleSliderState extends State<ConsoleSlider> {
     final divisions = widget.divisions ?? 20;
     final step = (widget.max - widget.min) / divisions;
     final next = (_local + direction * step).clamp(widget.min, widget.max);
-    if (next == _local) return;
+    if (next == _local) {
+      // Already at the end-stop — thud + decay
+      HapticService.sliderEndStop();
+      return;
+    }
     setState(() => _local = next);
     widget.onChanged(next);
+    // Normalised 0→1 position drives amplitude ramping
+    final normValue = (next - widget.min) / (widget.max - widget.min);
+    HapticService.sliderDetent(normValue);
   }
 
   @override
@@ -427,6 +416,11 @@ class _ConsoleSliderState extends State<ConsoleSlider> {
               max: widget.max,
               divisions: widget.divisions,
               onChanged: (v) {
+                if (v != _local) {
+                  final normValue =
+                      (v - widget.min) / (widget.max - widget.min);
+                  HapticService.sliderDetent(normValue);
+                }
                 setState(() => _local = v);
                 widget.onChanged(v);
               },
@@ -459,7 +453,7 @@ class _ConsoleSliderState extends State<ConsoleSlider> {
   }
 }
 
-// ── Custom slider components ──────────────────────────────────────────────────
+// ── Custom slider components ───────────────────────────────────────────────────
 
 class _DiamondThumbShape extends SliderComponentShape {
   @override

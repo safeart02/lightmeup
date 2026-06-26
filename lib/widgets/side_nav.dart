@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../screens/home_screen.dart';
+import '../services/haptic_service.dart';
 
 class SideNav extends StatelessWidget {
   const SideNav({
@@ -50,6 +52,14 @@ class SideNav extends StatelessWidget {
             onTap: onSelect,
           ),
           _NavItem(
+            icon: Icons.auto_awesome_rounded,
+            label: 'Effects',
+            section: NavSection.effects,
+            selected: selected,
+            navFocused: navFocused,
+            onTap: onSelect,
+          ),
+          _NavItem(
             icon: Icons.crop_free_rounded,
             label: 'Capture',
             section: NavSection.capture,
@@ -61,14 +71,6 @@ class SideNav extends StatelessWidget {
             icon: Icons.speed_rounded,
             label: 'Performance',
             section: NavSection.performance,
-            selected: selected,
-            navFocused: navFocused,
-            onTap: onSelect,
-          ),
-          _NavItem(
-            icon: Icons.gamepad_rounded,
-            label: 'Controls',
-            section: NavSection.controls,
             selected: selected,
             navFocused: navFocused,
             onTap: onSelect,
@@ -94,7 +96,7 @@ class SideNav extends StatelessWidget {
   }
 }
 
-// ── Nav item ──────────────────────────────────────────────────────────────────
+// ── Nav item ───────────────────────────────────────────────────────────────────
 
 class _NavItem extends StatelessWidget {
   const _NavItem({
@@ -145,7 +147,10 @@ class _NavItem extends StatelessWidget {
     }
 
     return GestureDetector(
-      onTap: () => onTap(section),
+      onTap: () {
+        HapticService.modeSelect();
+        onTap(section);
+      },
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 150),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
@@ -180,7 +185,7 @@ class _NavItem extends StatelessWidget {
   }
 }
 
-// ── Power button ──────────────────────────────────────────────────────────────
+// ── Power button ───────────────────────────────────────────────────────────────
 
 class _PowerButton extends StatefulWidget {
   const _PowerButton({required this.isRunning, required this.onToggle});
@@ -229,7 +234,14 @@ class _PowerButtonState extends State<_PowerButton>
     final isOn = widget.isRunning;
 
     return GestureDetector(
-      onTap: widget.onToggle,
+      onTap: () {
+        if (widget.isRunning) {
+          HapticService.serviceOff();
+        } else {
+          HapticService.serviceOn();
+        }
+        widget.onToggle();
+      },
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 250),
         height: 42,
