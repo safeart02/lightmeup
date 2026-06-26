@@ -2,18 +2,17 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../services/app_state.dart';
+import '../services/haptic_service.dart';
 import '../widgets/side_nav.dart';
 import '../widgets/top_bar.dart';
 import '../widgets/bottom_bar.dart';
-import '../widgets/quick_panel.dart';
 import '../sections/output_section.dart';
 import '../sections/capture_section.dart';
 import '../sections/performance_section.dart';
 import '../sections/about_section.dart';
-import '../sections/control_section.dart';
 import '../sections/effects_section.dart';
 
-enum NavSection { output, effects, capture, performance, controls, about }
+enum NavSection { output, effects, capture, performance, about }
 
 /// Three-level focus model — mirrors standard console menu UX:
 ///
@@ -34,15 +33,11 @@ class _HomeScreenState extends State<HomeScreen> {
   NavSection _section = NavSection.output;
   int _cursorRow = 0;
 
-  // ── Quick panel controllers ────────────────────────────────────────────
-  final _leftPanelCtrl = QuickPanelController();
-  final _rightPanelCtrl = QuickPanelController();
+  // Explicit FocusNode so we can call requestFocus() in initState,
+  // guaranteeing the first controller input is handled immediately.
+  late final FocusNode _focusNode;
 
-  // ── Swipe detection ────────────────────────────────────────────────────
-  static const _swipeZoneWidth = 24.0;
-  static const _swipeVelocityThreshold = 300.0;
-
-  // ── Slider controllers ─────────────────────────────────────────────────
+  // ── Slider controllers ─────────────────────────────────────────────────────
   final _brightnessCtrl = SliderController();
   final _smoothingCtrl = SliderController();
   final _zoneWidthCtrl = SliderController();
@@ -53,7 +48,6 @@ class _HomeScreenState extends State<HomeScreen> {
     NavSection.effects: 0,
     NavSection.capture: 1,
     NavSection.performance: 1,
-    NavSection.controls: 0,
     NavSection.about: 0,
   };
 
@@ -68,15 +62,39 @@ class _HomeScreenState extends State<HomeScreen> {
       case NavSection.performance:
         return [_frameSkipCtrl];
       case NavSection.effects:
-      case NavSection.controls:
       case NavSection.about:
         return [];
     }
   }
 
-  bool get _eitherPanelOpen => _leftPanelCtrl.isOpen || _rightPanelCtrl.isOpen;
+  @override
+  void initState() {
+    super.initState();
+    _focusNode = FocusNode(
+      // Prevent Flutter's traversal system from ever moving focus away from
+      // this node to some other widget (button, slider, etc.) which would
+      // cause the yellow border and the double-press problem.
+      skipTraversal: true,
+      // Suppress the default system focus highlight rectangle entirely.
+      // The app draws its own indicators.
+      descendantsAreFocusable: false,
+    );
+    // Request focus immediately — before the first frame — so the very first
+    // controller input goes to _handleKey instead of claiming focus.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _focusNode.requestFocus();
+      FocusManager.instance.highlightStrategy =
+          FocusHighlightStrategy.alwaysTouch; // ✅ add this
+    });
+  }
 
-  // ── Build ──────────────────────────────────────────────────────────────
+  @override
+  void dispose() {
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  // ── Build ──────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -94,107 +112,68 @@ class _HomeScreenState extends State<HomeScreen> {
     return Scaffold(
       backgroundColor: ConsoleColors.bg,
       body: Focus(
-        autofocus: true,
+        focusNode: _focusNode,
         onKeyEvent: (_, event) => _handleKey(event, state),
-        child: Stack(
+        child: Column(
           children: [
-            // ── Main UI ─────────────────────────────────────────────────
-            Column(
-              children: [
-                TopBar(
-                  isRunning: state.isRunning,
-                  onToggle: () => context.read<AppState>().toggleService(),
-                ),
-                Expanded(
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      SideNav(
-                        selected: _section,
-                        isRunning: state.isRunning,
-                        navFocused: _level == FocusLevel.nav,
-                        onSelect: (s) => setState(() {
-                          _section = s;
-                          _level = FocusLevel.nav;
-                          _cursorRow = 0;
-                        }),
-                        onToggle: () =>
-                            context.read<AppState>().toggleService(),
-                      ),
-                      Expanded(
-                        child: AnimatedSwitcher(
-                          duration: const Duration(milliseconds: 180),
-                          switchInCurve: Curves.easeOut,
-                          switchOutCurve: Curves.easeIn,
-                          transitionBuilder: (child, anim) => FadeTransition(
-                            opacity: anim,
-                            child: SlideTransition(
-                              position: Tween<Offset>(
-                                begin: const Offset(0.02, 0),
-                                end: Offset.zero,
-                              ).animate(anim),
-                              child: child,
-                            ),
-                          ),
-                          child: _buildSection(state),
+            TopBar(
+              isRunning: state.isRunning,
+              onToggle: () => _toggleService(state),
+            ),
+            Expanded(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  SideNav(
+                    selected: _section,
+                    isRunning: state.isRunning,
+                    navFocused: _level == FocusLevel.nav,
+                    onSelect: (s) {
+                      HapticService.navMove();
+                      setState(() {
+                        _section = s;
+                        _level = FocusLevel.nav;
+                        _cursorRow = 0;
+                      });
+                    },
+                    onToggle: () => _toggleService(state),
+                  ),
+                  Expanded(
+                    child: AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 180),
+                      switchInCurve: Curves.easeOut,
+                      switchOutCurve: Curves.easeIn,
+                      transitionBuilder: (child, anim) => FadeTransition(
+                        opacity: anim,
+                        child: SlideTransition(
+                          position: Tween<Offset>(
+                            begin: const Offset(0.02, 0),
+                            end: Offset.zero,
+                          ).animate(anim),
+                          child: child,
                         ),
                       ),
-                    ],
+                      child: _buildSection(state),
+                    ),
                   ),
-                ),
-                BottomBar(
-                  isRunning: state.isRunning,
-                  level: _level,
-                  panelOpen: _eitherPanelOpen,
-                ),
-              ],
-            ),
-
-            // ── Left swipe zone (invisible) ──────────────────────────────
-            Positioned(
-              left: 0,
-              top: 0,
-              bottom: 0,
-              width: _swipeZoneWidth,
-              child: GestureDetector(
-                behavior: HitTestBehavior.translucent,
-                onHorizontalDragEnd: (details) {
-                  final v = details.primaryVelocity ?? 0;
-                  if (v > _swipeVelocityThreshold && !_eitherPanelOpen) {
-                    _leftPanelCtrl.open();
-                    setState(() {});
-                  }
-                },
+                ],
               ),
             ),
-
-            // ── Right swipe zone (invisible) ─────────────────────────────
-            Positioned(
-              right: 0,
-              top: 0,
-              bottom: 0,
-              width: _swipeZoneWidth,
-              child: GestureDetector(
-                behavior: HitTestBehavior.translucent,
-                onHorizontalDragEnd: (details) {
-                  final v = details.primaryVelocity ?? 0;
-                  if (v < -_swipeVelocityThreshold && !_eitherPanelOpen) {
-                    _rightPanelCtrl.open();
-                    setState(() {});
-                  }
-                },
-              ),
-            ),
-
-            // ── Left quick panel ─────────────────────────────────────────
-            QuickPanel(controller: _leftPanelCtrl, side: PanelSide.left),
-
-            // ── Right quick panel ────────────────────────────────────────
-            QuickPanel(controller: _rightPanelCtrl, side: PanelSide.right),
+            BottomBar(isRunning: state.isRunning, level: _level),
           ],
         ),
       ),
     );
+  }
+
+  void _toggleService(AppState state) {
+    final willBeOn = !state.isRunning;
+    if (willBeOn) {
+      HapticService.serviceOn();
+    } else {
+      HapticService.serviceOff();
+    }
+    context.read<AppState>().toggleService();
   }
 
   Widget _buildSection(AppState state) {
@@ -229,14 +208,12 @@ class _HomeScreenState extends State<HomeScreen> {
           activeRow: active,
           frameSkipCtrl: _frameSkipCtrl,
         );
-      case NavSection.controls:
-        return ControlsSection(key: const ValueKey('controls'), state: state);
       case NavSection.about:
         return AboutSection(key: const ValueKey('about'), state: state);
     }
   }
 
-  // ── Key handler ────────────────────────────────────────────────────────
+  // ── Key handler ────────────────────────────────────────────────────────────
 
   KeyEventResult _handleKey(KeyEvent event, AppState state) {
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
@@ -245,52 +222,22 @@ class _HomeScreenState extends State<HomeScreen> {
 
     final key = event.logicalKey;
 
-    if (_leftPanelCtrl.isOpen) {
-      if (key == state.settings.quickPanelLeftKey) {
-        _leftPanelCtrl.close();
-        setState(() {});
-        return KeyEventResult.handled;
-      }
-      return _leftPanelCtrl.handleKey(event, state);
-    }
-
-    if (_rightPanelCtrl.isOpen) {
-      if (key == state.settings.quickPanelRightKey) {
-        _rightPanelCtrl.close();
-        setState(() {});
-        return KeyEventResult.handled;
-      }
-      return _rightPanelCtrl.handleKey(event, state);
-    }
-
-    final leftKey = state.settings.quickPanelLeftKey;
-    final rightKey = state.settings.quickPanelRightKey;
-
-    if (leftKey != null && key == leftKey) {
-      _leftPanelCtrl.open();
-      setState(() {});
-      return KeyEventResult.handled;
-    }
-    if (rightKey != null && key == rightKey) {
-      _rightPanelCtrl.open();
-      setState(() {});
-      return KeyEventResult.handled;
-    }
-
     // Y — toggle service at any level
     if (key == LogicalKeyboardKey.keyY ||
         key == LogicalKeyboardKey.gameButtonY) {
-      context.read<AppState>().toggleService();
+      _toggleService(state);
       return KeyEventResult.handled;
     }
 
     switch (_level) {
       case FocusLevel.nav:
         if (key == LogicalKeyboardKey.arrowUp) {
+          HapticService.navMove();
           _cycleSection(-1);
           return KeyEventResult.handled;
         }
         if (key == LogicalKeyboardKey.arrowDown) {
+          HapticService.navMove();
           _cycleSection(1);
           return KeyEventResult.handled;
         }
@@ -298,6 +245,7 @@ class _HomeScreenState extends State<HomeScreen> {
             key == LogicalKeyboardKey.enter ||
             key == LogicalKeyboardKey.select ||
             key == LogicalKeyboardKey.arrowRight) {
+          HapticService.navEnter();
           if (_rowCount > 0) {
             setState(() {
               _level = FocusLevel.section;
@@ -312,23 +260,33 @@ class _HomeScreenState extends State<HomeScreen> {
 
       case FocusLevel.section:
         if (key == LogicalKeyboardKey.arrowUp) {
-          if (_cursorRow > 0) setState(() => _cursorRow--);
+          if (_cursorRow > 0) {
+            HapticService.rowMove();
+            setState(() => _cursorRow--);
+          }
           return KeyEventResult.handled;
         }
         if (key == LogicalKeyboardKey.arrowDown) {
-          if (_cursorRow < _rowCount - 1) setState(() => _cursorRow++);
+          if (_cursorRow < _rowCount - 1) {
+            HapticService.rowMove();
+            setState(() => _cursorRow++);
+          }
           return KeyEventResult.handled;
         }
         if (key == LogicalKeyboardKey.gameButtonA ||
             key == LogicalKeyboardKey.enter ||
             key == LogicalKeyboardKey.select) {
-          if (_rowCount > 0) setState(() => _level = FocusLevel.slider);
+          if (_rowCount > 0) {
+            HapticService.navEnter();
+            setState(() => _level = FocusLevel.slider);
+          }
           return KeyEventResult.handled;
         }
         if (key == LogicalKeyboardKey.gameButtonB ||
             key == LogicalKeyboardKey.escape ||
             key == LogicalKeyboardKey.browserBack ||
             key == LogicalKeyboardKey.arrowLeft) {
+          HapticService.navBack();
           setState(() {
             _level = FocusLevel.nav;
             _cursorRow = 0;
@@ -352,6 +310,7 @@ class _HomeScreenState extends State<HomeScreen> {
             key == LogicalKeyboardKey.gameButtonB ||
             key == LogicalKeyboardKey.escape ||
             key == LogicalKeyboardKey.browserBack) {
+          HapticService.confirm();
           setState(() => _level = FocusLevel.section);
           return KeyEventResult.handled;
         }

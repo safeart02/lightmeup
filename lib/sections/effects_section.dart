@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../../services/app_state.dart';
+import '../../services/haptic_service.dart';
 import '../../models/led_effect.dart';
 import '../screens/home_screen.dart';
 import '../widgets/bottom_bar.dart';
@@ -163,6 +164,34 @@ class _EffectsSectionState extends State<EffectsSection> {
           items.add(const _FocusItem(_ItemType.addColor, 'add_color'));
         }
         items.add(const _FocusItem(_ItemType.slider, 'slider_speed'));
+      case LedEffectMode.audioReactive:
+        // Sub-mode selector chips
+        for (final m in AudioColorMode.values) {
+          items.add(_FocusItem(_ItemType.preset, 'audio_mode_${m.name}'));
+        }
+        // Per-sub-mode color controls
+        switch (config.audioColorMode) {
+          case AudioColorMode.singleColor:
+            items.add(const _FocusItem(_ItemType.colorPicker, 'color_primary'));
+          case AudioColorMode.splitTheme:
+            items.add(const _FocusItem(_ItemType.colorPicker, 'color_primary'));
+            items.add(
+              const _FocusItem(_ItemType.colorPicker, 'color_secondary'),
+            );
+          case AudioColorMode.colorCycle:
+            for (int i = 0; i < config.cycleColors.length; i++) {
+              items.add(_FocusItem(_ItemType.colorPicker, 'color_cycle_$i'));
+              if (config.cycleColors.length > 2) {
+                items.add(_FocusItem(_ItemType.removeColor, 'remove_$i'));
+              }
+            }
+            if (config.cycleColors.length < 8) {
+              items.add(const _FocusItem(_ItemType.addColor, 'add_color'));
+            }
+            items.add(const _FocusItem(_ItemType.slider, 'slider_speed'));
+          case AudioColorMode.spectrum:
+            break; // no extra controls — fully automatic
+        }
       default:
         break;
     }
@@ -186,6 +215,7 @@ class _EffectsSectionState extends State<EffectsSection> {
       if (item == null) return;
 
       if (_is(key, _kCancel)) {
+        HapticFeedback.lightImpact();
         setState(() => _itemActive = false);
         return;
       }
@@ -214,16 +244,27 @@ class _EffectsSectionState extends State<EffectsSection> {
         if (delta != 0) {
           final next = (current + delta).clamp(minVal, maxVal);
           final snapped = (next * divisions).round() / divisions;
+          if (snapped != current) {
+            HapticFeedback.selectionClick();
+          } else {
+            HapticFeedback.heavyImpact();
+          }
           final nc = isSpeed
               ? config.copyWith(speed: snapped)
               : config.copyWith(dutyCycle: snapped);
           onChanged(nc);
         }
-        if (_is(key, _kConfirm)) setState(() => _itemActive = false);
+        if (_is(key, _kConfirm)) {
+          HapticFeedback.lightImpact();
+          setState(() => _itemActive = false);
+        }
         return;
       }
 
-      if (_is(key, _kConfirm)) setState(() => _itemActive = false);
+      if (_is(key, _kConfirm)) {
+        HapticFeedback.lightImpact();
+        setState(() => _itemActive = false);
+      }
       return;
     }
 
@@ -244,12 +285,14 @@ class _EffectsSectionState extends State<EffectsSection> {
         final next = _focusIndex + 1;
         // Stay in same row only
         if (next < modeCount && next ~/ gridCols == row) {
+          HapticFeedback.selectionClick();
           setState(() => _focusIndex = next);
           _scrollToFocused();
         }
       } else if (_is(key, _kLeft)) {
         final next = _focusIndex - 1;
         if (next >= 0 && next ~/ gridCols == row) {
+          HapticFeedback.selectionClick();
           setState(() => _focusIndex = next);
           _scrollToFocused();
         }
@@ -257,10 +300,12 @@ class _EffectsSectionState extends State<EffectsSection> {
         final nextRow = row + 1;
         if (nextRow < gridRows) {
           final next = (nextRow * gridCols + col).clamp(0, modeCount - 1);
+          HapticFeedback.selectionClick();
           setState(() => _focusIndex = next);
           _scrollToFocused();
         } else if (modeCount < count) {
           // Exit grid downward into controls
+          HapticFeedback.selectionClick();
           setState(() => _focusIndex = modeCount);
           _scrollToFocused();
         }
@@ -268,11 +313,13 @@ class _EffectsSectionState extends State<EffectsSection> {
         final nextRow = row - 1;
         if (nextRow >= 0) {
           final next = nextRow * gridCols + col;
+          HapticFeedback.selectionClick();
           setState(() => _focusIndex = next);
           _scrollToFocused();
         }
         // Top row: do nothing (no wrap)
       } else if (_is(key, _kConfirm)) {
+        HapticFeedback.mediumImpact();
         final item = _items[_focusIndex];
         final modeName = item.id.replaceFirst('mode_', '');
         final selectedMode = LedEffectMode.values.firstWhere(
@@ -286,17 +333,20 @@ class _EffectsSectionState extends State<EffectsSection> {
       // Linear controls below grid
       if (_is(key, _kDown)) {
         if (_focusIndex < count - 1) {
+          HapticFeedback.selectionClick();
           setState(() => _focusIndex++);
           _scrollToFocused();
         }
       } else if (_is(key, _kUp)) {
         if (_focusIndex > modeCount) {
+          HapticFeedback.selectionClick();
           setState(() => _focusIndex--);
           _scrollToFocused();
         } else {
           // Return to bottom-left cell of last grid row
           final gridRows = (modeCount + gridCols - 1) ~/ gridCols;
           final lastRowStart = (gridRows - 1) * gridCols;
+          HapticFeedback.selectionClick();
           setState(() => _focusIndex = lastRowStart.clamp(0, modeCount - 1));
           _scrollToFocused();
         }
@@ -305,25 +355,41 @@ class _EffectsSectionState extends State<EffectsSection> {
       } else if (_is(key, _kConfirm)) {
         final item = _items[_focusIndex];
         if (item.type == _ItemType.slider) {
+          HapticFeedback.lightImpact();
           setState(() => _itemActive = true);
         } else if (item.type == _ItemType.toggle) {
+          HapticFeedback.mediumImpact();
           onChanged(config.copyWith(mirrorSides: !config.mirrorSides));
         } else if (item.type == _ItemType.colorPicker) {
+          HapticFeedback.lightImpact();
           setState(() => _itemActive = true);
         } else if (item.type == _ItemType.addColor) {
+          HapticFeedback.mediumImpact();
           final next = List<Color>.from(config.cycleColors)
             ..add(const Color(0xFF00D4FF));
           onChanged(config.copyWith(cycleColors: next));
         } else if (item.type == _ItemType.removeColor) {
+          HapticFeedback.heavyImpact();
           final idx = int.parse(item.id.replaceFirst('remove_', ''));
           final next = List<Color>.from(config.cycleColors)..removeAt(idx);
           onChanged(config.copyWith(cycleColors: next));
         } else if (item.type == _ItemType.preset) {
-          final name = item.id.replaceFirst('preset_', '');
-          final colors = _ColorCycleConfigState._presets[name];
-          if (colors != null) onChanged(config.copyWith(cycleColors: colors));
+          HapticFeedback.mediumImpact();
+          if (item.id.startsWith('audio_mode_')) {
+            final modeName = item.id.replaceFirst('audio_mode_', '');
+            final audioMode = AudioColorMode.values.firstWhere(
+              (m) => m.name == modeName,
+              orElse: () => AudioColorMode.spectrum,
+            );
+            onChanged(config.copyWith(audioColorMode: audioMode));
+          } else {
+            final name = item.id.replaceFirst('preset_', '');
+            final colors = _ColorCycleConfigState._presets[name];
+            if (colors != null) onChanged(config.copyWith(cycleColors: colors));
+          }
         }
       } else if (_is(key, _kCancel)) {
+        HapticFeedback.lightImpact();
         _focusNode.previousFocus();
       }
     }
@@ -531,7 +597,10 @@ class _ModeTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTap: onTap,
+      onTap: () {
+        HapticFeedback.mediumImpact();
+        onTap();
+      },
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 160),
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -658,6 +727,13 @@ class _ModeConfig extends StatelessWidget {
         itemKeys: itemKeys,
       ),
       LedEffectMode.colorCycle => _ColorCycleConfig(
+        config: config,
+        onChanged: onChanged,
+        focusedId: focusedId,
+        itemActive: itemActive,
+        itemKeys: itemKeys,
+      ),
+      LedEffectMode.audioReactive => _AudioReactiveConfig(
         config: config,
         onChanged: onChanged,
         focusedId: focusedId,
@@ -986,9 +1062,12 @@ class _ColorCycleConfigState extends State<_ColorCycleConfig> {
                       key: itemKeys[id],
                       padding: const EdgeInsets.only(right: 8),
                       child: GestureDetector(
-                        onTap: () => widget.onChanged(
-                          widget.config.copyWith(cycleColors: entry.value),
-                        ),
+                        onTap: () {
+                          HapticFeedback.mediumImpact();
+                          widget.onChanged(
+                            widget.config.copyWith(cycleColors: entry.value),
+                          );
+                        },
                         child: _PresetChip(
                           name: entry.key,
                           colors: entry.value,
@@ -1031,6 +1110,7 @@ class _ColorCycleConfigState extends State<_ColorCycleConfig> {
                         key: itemKeys['remove_$i'],
                         isFocused: widget.focusedId == 'remove_$i',
                         onTap: () {
+                          HapticFeedback.heavyImpact();
                           final next = List<Color>.from(colors)..removeAt(i);
                           widget.onChanged(
                             widget.config.copyWith(cycleColors: next),
@@ -1045,6 +1125,7 @@ class _ColorCycleConfigState extends State<_ColorCycleConfig> {
                 key: itemKeys['add_color'],
                 isFocused: widget.focusedId == 'add_color',
                 onTap: () {
+                  HapticFeedback.mediumImpact();
                   final next = List<Color>.from(colors)
                     ..add(const Color(0xFF00D4FF));
                   widget.onChanged(widget.config.copyWith(cycleColors: next));
@@ -1078,6 +1159,301 @@ class _ColorCycleConfigState extends State<_ColorCycleConfig> {
             ),
           ],
         ),
+      ],
+    );
+  }
+}
+
+// ── Audio reactive config ─────────────────────────────────────────────────────
+
+class _AudioReactiveConfig extends StatelessWidget {
+  const _AudioReactiveConfig({
+    required this.config,
+    required this.onChanged,
+    required this.itemKeys,
+    this.focusedId,
+    this.itemActive = false,
+  });
+  final LedEffectConfig config;
+  final ValueChanged<LedEffectConfig> onChanged;
+  final Map<String, GlobalKey> itemKeys;
+  final String? focusedId;
+  final bool itemActive;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        // ── Color mode selector ───────────────────────────────────────────
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 14, 20, 4),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'COLOR MODE',
+                style: TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 7,
+                  letterSpacing: 2.0,
+                  color: ConsoleColors.text3,
+                ),
+              ),
+              const SizedBox(height: 8),
+              ExcludeFocus(
+                child: Column(
+                  children: [
+                    for (
+                      int row = 0;
+                      row < (AudioColorMode.values.length / 2).ceil();
+                      row++
+                    )
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 6),
+                        child: Row(
+                          children: [
+                            for (int col = 0; col < 2; col++)
+                              Builder(
+                                builder: (_) {
+                                  final i = row * 2 + col;
+                                  if (i >= AudioColorMode.values.length) {
+                                    return const Expanded(child: SizedBox());
+                                  }
+                                  final m = AudioColorMode.values[i];
+                                  final id = 'audio_mode_\\${m.name}';
+                                  final isFocused = focusedId == id;
+                                  final isSelected = config.audioColorMode == m;
+                                  return Expanded(
+                                    child: Padding(
+                                      padding: EdgeInsets.only(
+                                        left: col == 1 ? 6 : 0,
+                                      ),
+                                      child: GestureDetector(
+                                        key: itemKeys[id],
+                                        onTap: () {
+                                          HapticFeedback.mediumImpact();
+                                          onChanged(
+                                            config.copyWith(audioColorMode: m),
+                                          );
+                                        },
+                                        child: AnimatedContainer(
+                                          duration: const Duration(
+                                            milliseconds: 160,
+                                          ),
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 10,
+                                            vertical: 8,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: isSelected
+                                                ? ConsoleColors.cyanDim
+                                                : ConsoleColors.panel2,
+                                            border: Border.all(
+                                              color: isFocused
+                                                  ? Colors.white.withOpacity(
+                                                      0.8,
+                                                    )
+                                                  : isSelected
+                                                  ? ConsoleColors.cyan
+                                                        .withOpacity(0.6)
+                                                  : ConsoleColors.border2,
+                                              width: isFocused || isSelected
+                                                  ? 1.5
+                                                  : 1,
+                                            ),
+                                            borderRadius: BorderRadius.circular(
+                                              4,
+                                            ),
+                                          ),
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                m.label,
+                                                style: TextStyle(
+                                                  fontFamily: 'monospace',
+                                                  fontSize: 10,
+                                                  fontWeight: isSelected
+                                                      ? FontWeight.w700
+                                                      : FontWeight.w500,
+                                                  color: isSelected
+                                                      ? ConsoleColors.cyan
+                                                      : ConsoleColors.text2,
+                                                ),
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
+                                              const SizedBox(height: 2),
+                                              Text(
+                                                m.description,
+                                                style: const TextStyle(
+                                                  fontFamily: 'monospace',
+                                                  fontSize: 7,
+                                                  color: ConsoleColors.text3,
+                                                ),
+                                                maxLines: 2,
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  );
+                                },
+                              ),
+                          ],
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+
+        // ── Per-sub-mode color controls ───────────────────────────────────
+        switch (config.audioColorMode) {
+          AudioColorMode.singleColor => SettingGroup(
+            label: 'COLOR',
+            children: [
+              _ColorPickerRow(
+                key: itemKeys['color_primary'],
+                id: 'color_primary',
+                label: 'LED Color',
+                description: 'Hue used on both sticks',
+                color: config.primaryColor,
+                isFocused: focusedId == 'color_primary',
+                isActive: itemActive && focusedId == 'color_primary',
+                onChanged: (c) => onChanged(config.copyWith(primaryColor: c)),
+              ),
+            ],
+          ),
+          AudioColorMode.splitTheme => SettingGroup(
+            label: 'COLORS',
+            children: [
+              _ColorPickerRow(
+                key: itemKeys['color_primary'],
+                id: 'color_primary',
+                label: 'Bass Color',
+                description: 'Left stick — reacts to bass',
+                color: config.primaryColor,
+                accentColor: ConsoleColors.cyan,
+                isFocused: focusedId == 'color_primary',
+                isActive: itemActive && focusedId == 'color_primary',
+                onChanged: (c) => onChanged(config.copyWith(primaryColor: c)),
+              ),
+              _ColorPickerRow(
+                key: itemKeys['color_secondary'],
+                id: 'color_secondary',
+                label: 'Highs Color',
+                description: 'Right stick — reacts to mids & highs',
+                color: config.secondaryColor,
+                accentColor: ConsoleColors.violet,
+                isFocused: focusedId == 'color_secondary',
+                isActive: itemActive && focusedId == 'color_secondary',
+                onChanged: (c) => onChanged(config.copyWith(secondaryColor: c)),
+              ),
+            ],
+          ),
+          AudioColorMode.colorCycle => Column(
+            children: [
+              SettingGroup(
+                label: 'CYCLE COLORS  (${config.cycleColors.length})',
+                children: [
+                  for (int i = 0; i < config.cycleColors.length; i++)
+                    _ColorPickerRow(
+                      key: itemKeys['color_cycle_$i'],
+                      id: 'color_cycle_$i',
+                      label: 'Color ${i + 1}',
+                      description: i == 0
+                          ? 'First in cycle'
+                          : i == config.cycleColors.length - 1
+                          ? 'Last in cycle'
+                          : 'Step ${i + 1}',
+                      color: config.cycleColors[i],
+                      isFocused: focusedId == 'color_cycle_$i',
+                      isActive: itemActive && focusedId == 'color_cycle_$i',
+                      onChanged: (c) {
+                        final next = List<Color>.from(config.cycleColors);
+                        next[i] = c;
+                        onChanged(config.copyWith(cycleColors: next));
+                      },
+                      trailing: config.cycleColors.length > 2
+                          ? _RemoveButton(
+                              key: itemKeys['remove_$i'],
+                              isFocused: focusedId == 'remove_$i',
+                              onTap: () {
+                                HapticFeedback.heavyImpact();
+                                final next = List<Color>.from(
+                                  config.cycleColors,
+                                )..removeAt(i);
+                                onChanged(config.copyWith(cycleColors: next));
+                              },
+                            )
+                          : null,
+                    ),
+                  if (config.cycleColors.length < 8)
+                    _AddColorButton(
+                      key: itemKeys['add_color'],
+                      isFocused: focusedId == 'add_color',
+                      onTap: () {
+                        HapticFeedback.mediumImpact();
+                        final next = List<Color>.from(config.cycleColors)
+                          ..add(const Color(0xFF00D4FF));
+                        onChanged(config.copyWith(cycleColors: next));
+                      },
+                    ),
+                ],
+              ),
+              SettingGroup(
+                label: 'CYCLE SPEED',
+                children: [
+                  _SliderRow(
+                    key: itemKeys['slider_speed'],
+                    id: 'slider_speed',
+                    label: 'Palette Speed',
+                    description: 'How fast it steps through your colors',
+                    value: config.speed,
+                    min: 0.05,
+                    max: 1.0,
+                    divisions: 19,
+                    isFocused: focusedId == 'slider_speed',
+                    isActive: itemActive && focusedId == 'slider_speed',
+                    labelBuilder: (v) {
+                      if (v < 0.25) return 'Slow';
+                      if (v < 0.6) return 'Med';
+                      return 'Fast';
+                    },
+                    onChanged: (v) => onChanged(config.copyWith(speed: v)),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          AudioColorMode.spectrum => Padding(
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 4),
+            child: Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: ConsoleColors.cyanGlow,
+                border: Border.all(color: ConsoleColors.cyan.withOpacity(0.2)),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: const Text(
+                'Bass → warm reds/oranges (left stick)\n'
+                'Mids & highs → cool blues/cyans (right stick)\n'
+                'Intensity drives saturation and brightness.',
+                style: TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 9,
+                  color: ConsoleColors.text2,
+                  height: 1.6,
+                ),
+              ),
+            ),
+          ),
+        },
       ],
     );
   }
@@ -1188,7 +1564,9 @@ class _PreviewBar extends StatelessWidget {
     final Color leftPreview;
     final Color rightPreview;
 
-    if (isRunning && mode == LedEffectMode.ambientSync) {
+    if (isRunning &&
+        (mode == LedEffectMode.ambientSync ||
+            mode == LedEffectMode.audioReactive)) {
       leftPreview = currentColors.left as Color;
       rightPreview = currentColors.right as Color;
     } else {
@@ -1368,6 +1746,7 @@ class _ColorPickerRowState extends State<_ColorPickerRow> {
   void _openPicker() {
     if (_pickerOpen) return;
     _pickerOpen = true;
+    HapticFeedback.lightImpact();
     showModalBottomSheet<void>(
       context: context,
       backgroundColor: ConsoleColors.panel,
@@ -1469,7 +1848,8 @@ class _ColorPickerRowState extends State<_ColorPickerRow> {
 
 // ── Color picker bottom sheet ─────────────────────────────────────────────────
 
-// Which section of the picker the gamepad cursor is in.
+// Which section of the picker the gamepad cursor is hovering over.
+// None means no section is focused yet (just opened the sheet).
 enum _PickerSection { quick, hue, satVal, apply }
 
 class _ColorPickerSheet extends StatefulWidget {
@@ -1492,15 +1872,20 @@ class _ColorPickerSheet extends StatefulWidget {
 class _ColorPickerSheetState extends State<_ColorPickerSheet> {
   late HSVColor _hsv;
 
-  // Gamepad state
-  _PickerSection _section = _PickerSection.hue;
-  int _quickIndex = 0; // active swatch index when section == quick
+  // Which section is currently highlighted by the D-pad cursor.
+  _PickerSection _focusedSection = _PickerSection.quick;
 
-  // Step sizes
-  static const double _hueStep = 3.0; // degrees per d-pad tick
-  static const double _hueJump = 30.0; // degrees per L1/R1
-  static const double _svStep = 0.03; // sat/val per d-pad tick
-  static const double _svJump = 0.15; // sat/val per L1/R1
+  // Whether the focused section is "entered" (A was pressed to activate it).
+  // When false: D-pad Up/Down moves between sections; A enters; B closes.
+  // When true:  D-pad controls the active section; A or B exits back to browsing.
+  bool _sectionActive = false;
+
+  // Cursor position within the quick-pick row (only used when quick is active).
+  int _quickIndex = 0;
+
+  // ── Step sizes ──────────────────────────────────────────────────────────────
+  static const double _hueStep = 3.0; // degrees per ◄►
+  static const double _svStep = 0.03; // saturation per ◄►, brightness per ▲▼
 
   final _focusNode = FocusNode();
 
@@ -1508,7 +1893,6 @@ class _ColorPickerSheetState extends State<_ColorPickerSheet> {
   void initState() {
     super.initState();
     _hsv = HSVColor.fromColor(widget.initialColor);
-    // Start focused so key events arrive immediately without a tap.
     WidgetsBinding.instance.addPostFrameCallback(
       (_) => _focusNode.requestFocus(),
     );
@@ -1521,175 +1905,189 @@ class _ColorPickerSheetState extends State<_ColorPickerSheet> {
   }
 
   void _apply(Color c) {
+    HapticService.confirm();
     widget.onChanged(c);
     Navigator.pop(context);
   }
 
+  void _hapticColorChange(HSVColor prev, HSVColor next) {
+    final dHue = (next.hue - prev.hue).abs() / 360.0;
+    final dSat = (next.saturation - prev.saturation).abs();
+    final dVal = (next.value - prev.value).abs();
+    final magnitude = (dHue + dSat + dVal).clamp(0.0, 1.0);
+    if (magnitude > 0) HapticService.sliderDetent(magnitude);
+  }
+
+  void _updateHsv(HSVColor next) {
+    final prev = _hsv;
+    setState(() => _hsv = next);
+    widget.onChanged(next.toColor());
+    _hapticColorChange(prev, next);
+  }
+
+  // ── Move focus between sections (browsing mode only) ────────────────────────
+  void _moveFocus(int dir) {
+    HapticService.rowMove();
+    final sections = _PickerSection.values;
+    final idx = (sections.indexOf(_focusedSection) + dir).clamp(
+      0,
+      sections.length - 1,
+    );
+    setState(() => _focusedSection = sections[idx]);
+  }
+
+  // ── Key handler ─────────────────────────────────────────────────────────────
+  //
+  // BROWSING MODE (sectionActive == false):
+  //   ▲ / ▼   → move focus between sections
+  //   A       → enter the focused section (activate it)
+  //   B       → close the picker
+  //
+  // ACTIVE MODE (sectionActive == true):
+  //   quick:   ◄ ► move swatch cursor; A applies the swatch; B exits active
+  //   hue:     ◄ ► adjust hue; A/B exit active
+  //   satVal:  ◄ ► saturation, ▲ ▼ brightness; A/B exit active
+  //   apply:   A applies & closes; B exits active
   void _onKey(KeyEvent event) {
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) return;
     final key = event.logicalKey;
 
-    // B always cancels
+    // ── BROWSING MODE ─────────────────────────────────────────────────────────
+    if (!_sectionActive) {
+      if (_is(key, _kCancel)) {
+        HapticService.navBack();
+        Navigator.pop(context);
+        return;
+      }
+      if (_is(key, _kUp)) {
+        _moveFocus(-1);
+        return;
+      }
+      if (_is(key, _kDown)) {
+        _moveFocus(1);
+        return;
+      }
+      if (_is(key, _kConfirm)) {
+        if (_focusedSection == _PickerSection.apply) {
+          // Apply section doesn't need "activation" — confirm goes straight to apply.
+          _apply(_hsv.toColor());
+        } else {
+          HapticService.confirm();
+          setState(() => _sectionActive = true);
+        }
+        return;
+      }
+      // Left/right and shoulder buttons do nothing in browsing mode.
+      return;
+    }
+
+    // ── ACTIVE MODE ───────────────────────────────────────────────────────────
+
+    // A or B always exits active mode back to browsing (except apply section
+    // where A confirms, handled per-section below).
     if (_is(key, _kCancel)) {
-      Navigator.pop(context);
+      HapticService.navBack();
+      setState(() => _sectionActive = false);
       return;
     }
 
-    // L1 / R1 cycle sections (when not adjusting hue/sat in those sections)
-    // We repurpose L1/R1 for coarse steps inside hue & satVal, so section
-    // cycling uses them only in quick/apply.
-    if (_section == _PickerSection.quick || _section == _PickerSection.apply) {
-      if (_is(key, _kL1)) {
-        _cycleSection(-1);
-        return;
-      }
-      if (_is(key, _kR1)) {
-        _cycleSection(1);
-        return;
-      }
-    }
-
-    // Up / Down always cycle sections
-    if (_is(key, _kUp)) {
-      _cycleSection(-1);
-      return;
-    }
-    if (_is(key, _kDown)) {
-      _cycleSection(1);
-      return;
-    }
-
-    switch (_section) {
-      // ── QUICK PICK ────────────────────────────────────────────────────
+    switch (_focusedSection) {
+      // ── QUICK PICK ─────────────────────────────────────────────────────────
       case _PickerSection.quick:
         if (_is(key, _kLeft)) {
-          setState(
-            () => _quickIndex = (_quickIndex - 1).clamp(
-              0,
-              widget.quickColors.length - 1,
-            ),
+          final next = (_quickIndex - 1).clamp(
+            0,
+            widget.quickColors.length - 1,
           );
+          if (next != _quickIndex) {
+            HapticService.navMove();
+            setState(() => _quickIndex = next);
+          } else {
+            HapticService.sliderEndStop();
+          }
         } else if (_is(key, _kRight)) {
-          setState(
-            () => _quickIndex = (_quickIndex + 1).clamp(
-              0,
-              widget.quickColors.length - 1,
-            ),
+          final next = (_quickIndex + 1).clamp(
+            0,
+            widget.quickColors.length - 1,
           );
+          if (next != _quickIndex) {
+            HapticService.navMove();
+            setState(() => _quickIndex = next);
+          } else {
+            HapticService.sliderEndStop();
+          }
         } else if (_is(key, _kConfirm)) {
+          // Apply the highlighted swatch and close.
           _apply(widget.quickColors[_quickIndex]);
         }
+      // Up/down ignored while a section is active.
 
-      // ── HUE BAR ───────────────────────────────────────────────────────
+      // ── HUE ────────────────────────────────────────────────────────────────
       case _PickerSection.hue:
         double delta = 0;
         if (_is(key, _kLeft)) delta = -_hueStep;
         if (_is(key, _kRight)) delta = _hueStep;
-        if (_is(key, _kL1)) delta = -_hueJump;
-        if (_is(key, _kR1)) delta = _hueJump;
         if (delta != 0) {
-          setState(() {
-            final h = (_hsv.hue + delta) % 360;
-            _hsv = _hsv.withHue(h < 0 ? h + 360 : h);
-            widget.onChanged(_hsv.toColor());
-          });
-        } else if (_is(key, _kConfirm)) {
-          _cycleSection(1); // jump to sat/val
+          final h = (_hsv.hue + delta) % 360;
+          _updateHsv(_hsv.withHue(h < 0 ? h + 360 : h));
+        }
+        if (_is(key, _kConfirm)) {
+          // Confirm exits active mode (color is already live-previewed).
+          setState(() => _sectionActive = false);
         }
 
-      // ── SAT / VAL BOX ─────────────────────────────────────────────────
+      // ── SAT / VAL ──────────────────────────────────────────────────────────
       case _PickerSection.satVal:
         double ds = 0, dv = 0;
         if (_is(key, _kLeft)) ds = -_svStep;
         if (_is(key, _kRight)) ds = _svStep;
-        if (_is(key, _kUp)) {
-          dv = _svStep;
-          return;
-        } // up/down handled above
-        if (_is(key, _kDown)) {
-          dv = -_svStep;
-          return;
-        } // but we catch it here first
-        if (_is(key, _kL1)) ds = -_svJump;
-        if (_is(key, _kR1)) ds = _svJump;
+        if (_is(key, _kUp)) dv = _svStep; // ▲ = brighter
+        if (_is(key, _kDown)) dv = -_svStep; // ▼ = darker
         if (ds != 0 || dv != 0) {
-          setState(() {
-            final s = (_hsv.saturation + ds).clamp(0.0, 1.0);
-            final v = (_hsv.value + dv).clamp(0.0, 1.0);
-            _hsv = HSVColor.fromAHSV(1.0, _hsv.hue, s, v);
-            widget.onChanged(_hsv.toColor());
-          });
-        } else if (_is(key, _kConfirm)) {
-          _cycleSection(1); // jump to apply
+          final s = (_hsv.saturation + ds).clamp(0.0, 1.0);
+          final v = (_hsv.value + dv).clamp(0.0, 1.0);
+          if ((ds < 0 && _hsv.saturation <= 0) ||
+              (ds > 0 && _hsv.saturation >= 1) ||
+              (dv < 0 && _hsv.value <= 0) ||
+              (dv > 0 && _hsv.value >= 1)) {
+            HapticService.sliderEndStop();
+          } else {
+            _updateHsv(HSVColor.fromAHSV(1.0, _hsv.hue, s, v));
+          }
+        }
+        if (_is(key, _kConfirm)) {
+          setState(() => _sectionActive = false);
         }
 
-      // ── APPLY ─────────────────────────────────────────────────────────
+      // ── APPLY ──────────────────────────────────────────────────────────────
+      // (browsing A already calls _apply directly, so this branch is only
+      //  reached if somehow sectionActive is true for apply — which won't
+      //  happen, but guard it anyway.)
       case _PickerSection.apply:
-        if (_is(key, _kConfirm)) _apply(_hsv.toColor());
+        if (_is(key, _kConfirm)) {
+          _apply(_hsv.toColor());
+        }
     }
   }
 
-  // satVal needs separate up/down handling (changes value, not section).
-  // We intercept up/down before the section switch for satVal.
-  void _onKeyRaw(KeyEvent event) {
-    if (event is! KeyDownEvent && event is! KeyRepeatEvent) return;
-    final key = event.logicalKey;
-
-    if (_section == _PickerSection.satVal) {
-      double dv = 0;
-      if (_is(key, _kUp)) dv = _svStep;
-      if (_is(key, _kDown)) dv = -_svStep;
-      if (dv != 0) {
-        setState(() {
-          final v = (_hsv.value + dv).clamp(0.0, 1.0);
-          _hsv = HSVColor.fromAHSV(1.0, _hsv.hue, _hsv.saturation, v);
-          widget.onChanged(_hsv.toColor());
-        });
-        return;
-      }
-    }
-    _onKey(event);
-  }
-
-  void _cycleSection(int dir) {
-    final sections = _PickerSection.values;
-    final idx = (sections.indexOf(_section) + dir).clamp(
-      0,
-      sections.length - 1,
-    );
-    setState(() => _section = sections[idx]);
-  }
-
-  // Hint text for the bottom bar, per section.
+  // ── Hint bar data ────────────────────────────────────────────────────────────
   List<(String, String)> get _hints {
-    switch (_section) {
+    if (!_sectionActive) {
+      return [('▲ ▼', 'Move'), ('A', 'Select'), ('B', 'Close')];
+    }
+    switch (_focusedSection) {
       case _PickerSection.quick:
-        return [
-          ('◀ ▶', 'Choose swatch'),
-          ('A', 'Apply'),
-          ('↑ ↓ / L1 R1', 'Switch section'),
-          ('B', 'Cancel'),
-        ];
+        return [('◀ ▶', 'Pick swatch'), ('A', 'Apply'), ('B', 'Back')];
       case _PickerSection.hue:
-        return [
-          ('◀ ▶', 'Adjust hue'),
-          ('L1 R1', 'Jump ±30°'),
-          ('↑ ↓', 'Switch section'),
-          ('B', 'Cancel'),
-        ];
+        return [('◀ ▶', 'Hue'), ('A / B', 'Done')];
       case _PickerSection.satVal:
         return [
           ('◀ ▶', 'Saturation'),
-          ('↑ ↓', 'Brightness'),
-          ('L1 R1', 'Coarse sat'),
-          ('B', 'Cancel'),
+          ('▲ ▼', 'Brightness'),
+          ('A / B', 'Done'),
         ];
       case _PickerSection.apply:
-        return [
-          ('A', 'Confirm color'),
-          ('↑ ↓ / L1 R1', 'Switch section'),
-          ('B', 'Cancel'),
-        ];
+        return [('A', 'Confirm'), ('B', 'Back')];
     }
   }
 
@@ -1699,7 +2097,7 @@ class _ColorPickerSheetState extends State<_ColorPickerSheet> {
 
     return KeyboardListener(
       focusNode: _focusNode,
-      onKeyEvent: _onKeyRaw,
+      onKeyEvent: _onKey,
       child: Padding(
         padding: EdgeInsets.only(
           left: 20,
@@ -1746,23 +2144,37 @@ class _ColorPickerSheetState extends State<_ColorPickerSheet> {
             // ── Quick pick ────────────────────────────────────────────────
             _SectionLabel(
               label: 'QUICK PICK',
-              active: _section == _PickerSection.quick,
+              focused: _focusedSection == _PickerSection.quick,
+              active: _focusedSection == _PickerSection.quick && _sectionActive,
             ),
             const SizedBox(height: 8),
             GestureDetector(
-              // Tap anywhere in the row to focus the section
-              onTap: () => setState(() => _section = _PickerSection.quick),
+              onTap: () {
+                setState(() {
+                  _focusedSection = _PickerSection.quick;
+                  _sectionActive = true;
+                });
+              },
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 120),
                 padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 6),
                 decoration: BoxDecoration(
-                  color: _section == _PickerSection.quick
-                      ? Colors.white.withOpacity(0.04)
+                  color: _focusedSection == _PickerSection.quick
+                      ? _sectionActive
+                            ? ConsoleColors.cyan.withOpacity(0.08)
+                            : Colors.white.withOpacity(0.04)
                       : Colors.transparent,
                   border: Border.all(
-                    color: _section == _PickerSection.quick
-                        ? Colors.white.withOpacity(0.2)
+                    color: _focusedSection == _PickerSection.quick
+                        ? _sectionActive
+                              ? ConsoleColors.cyan.withOpacity(0.5)
+                              : Colors.white.withOpacity(0.25)
                         : Colors.transparent,
+                    width:
+                        _focusedSection == _PickerSection.quick &&
+                            _sectionActive
+                        ? 1.5
+                        : 1,
                   ),
                   borderRadius: BorderRadius.circular(6),
                 ),
@@ -1772,9 +2184,14 @@ class _ColorPickerSheetState extends State<_ColorPickerSheet> {
                     final i = e.key;
                     final c = e.value;
                     final isGamepadFocused =
-                        _section == _PickerSection.quick && _quickIndex == i;
+                        _focusedSection == _PickerSection.quick &&
+                        _sectionActive &&
+                        _quickIndex == i;
                     return GestureDetector(
-                      onTap: () => _apply(c),
+                      onTap: () {
+                        HapticService.confirm();
+                        _apply(c);
+                      },
                       child: AnimatedContainer(
                         duration: const Duration(milliseconds: 100),
                         width: 26,
@@ -1809,30 +2226,48 @@ class _ColorPickerSheetState extends State<_ColorPickerSheet> {
             const SizedBox(height: 16),
 
             // ── Hue bar ───────────────────────────────────────────────────
-            _SectionLabel(label: 'HUE', active: _section == _PickerSection.hue),
+            _SectionLabel(
+              label: 'HUE',
+              focused: _focusedSection == _PickerSection.hue,
+              active: _focusedSection == _PickerSection.hue && _sectionActive,
+            ),
             const SizedBox(height: 6),
             GestureDetector(
-              onTap: () => setState(() => _section = _PickerSection.hue),
+              onTap: () {
+                setState(() {
+                  _focusedSection = _PickerSection.hue;
+                  _sectionActive = true;
+                });
+              },
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 120),
                 padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
                 decoration: BoxDecoration(
-                  color: _section == _PickerSection.hue
-                      ? Colors.white.withOpacity(0.04)
+                  color: _focusedSection == _PickerSection.hue
+                      ? _sectionActive
+                            ? ConsoleColors.cyan.withOpacity(0.08)
+                            : Colors.white.withOpacity(0.04)
                       : Colors.transparent,
                   border: Border.all(
-                    color: _section == _PickerSection.hue
-                        ? Colors.white.withOpacity(0.2)
+                    color: _focusedSection == _PickerSection.hue
+                        ? _sectionActive
+                              ? ConsoleColors.cyan.withOpacity(0.5)
+                              : Colors.white.withOpacity(0.25)
                         : Colors.transparent,
+                    width:
+                        _focusedSection == _PickerSection.hue && _sectionActive
+                        ? 1.5
+                        : 1,
                   ),
                   borderRadius: BorderRadius.circular(6),
                 ),
                 child: _HueBar(
                   hue: _hsv.hue,
-                  onChanged: (h) => setState(() {
-                    _hsv = _hsv.withHue(h);
+                  onChanged: (h) {
+                    setState(() => _hsv = _hsv.withHue(h));
                     widget.onChanged(_hsv.toColor());
-                  }),
+                    HapticService.colorPickerDrag();
+                  },
                 ),
               ),
             ),
@@ -1842,36 +2277,54 @@ class _ColorPickerSheetState extends State<_ColorPickerSheet> {
             // ── Sat / Val ─────────────────────────────────────────────────
             _SectionLabel(
               label: 'COLOR',
-              active: _section == _PickerSection.satVal,
+              focused: _focusedSection == _PickerSection.satVal,
+              active:
+                  _focusedSection == _PickerSection.satVal && _sectionActive,
             ),
             const SizedBox(height: 6),
             GestureDetector(
-              onTap: () => setState(() => _section = _PickerSection.satVal),
+              onTap: () {
+                setState(() {
+                  _focusedSection = _PickerSection.satVal;
+                  _sectionActive = true;
+                });
+              },
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 120),
                 padding: const EdgeInsets.all(4),
                 decoration: BoxDecoration(
-                  color: _section == _PickerSection.satVal
-                      ? Colors.white.withOpacity(0.04)
+                  color: _focusedSection == _PickerSection.satVal
+                      ? _sectionActive
+                            ? ConsoleColors.cyan.withOpacity(0.08)
+                            : Colors.white.withOpacity(0.04)
                       : Colors.transparent,
                   border: Border.all(
-                    color: _section == _PickerSection.satVal
-                        ? Colors.white.withOpacity(0.2)
+                    color: _focusedSection == _PickerSection.satVal
+                        ? _sectionActive
+                              ? ConsoleColors.cyan.withOpacity(0.5)
+                              : Colors.white.withOpacity(0.25)
                         : Colors.transparent,
+                    width:
+                        _focusedSection == _PickerSection.satVal &&
+                            _sectionActive
+                        ? 1.5
+                        : 1,
                   ),
                   borderRadius: BorderRadius.circular(6),
                 ),
                 child: _SatValBox(
                   hsv: _hsv,
-                  onChanged: (sv) => setState(() {
-                    _hsv = HSVColor.fromAHSV(
+                  onChanged: (sv) {
+                    final next = HSVColor.fromAHSV(
                       1.0,
                       _hsv.hue,
                       sv.saturation,
                       sv.value,
                     );
-                    widget.onChanged(_hsv.toColor());
-                  }),
+                    setState(() => _hsv = next);
+                    widget.onChanged(next.toColor());
+                    HapticService.colorPickerDrag();
+                  },
                 ),
               ),
             ),
@@ -1886,17 +2339,17 @@ class _ColorPickerSheetState extends State<_ColorPickerSheet> {
                 width: double.infinity,
                 padding: const EdgeInsets.symmetric(vertical: 12),
                 decoration: BoxDecoration(
-                  color: _section == _PickerSection.apply
+                  color: _focusedSection == _PickerSection.apply
                       ? current.withOpacity(0.25)
                       : current.withOpacity(0.12),
                   border: Border.all(
-                    color: _section == _PickerSection.apply
+                    color: _focusedSection == _PickerSection.apply
                         ? current.withOpacity(0.9)
                         : current.withOpacity(0.4),
-                    width: _section == _PickerSection.apply ? 1.5 : 1,
+                    width: _focusedSection == _PickerSection.apply ? 1.5 : 1,
                   ),
                   borderRadius: BorderRadius.circular(6),
-                  boxShadow: _section == _PickerSection.apply
+                  boxShadow: _focusedSection == _PickerSection.apply
                       ? [
                           BoxShadow(
                             color: current.withOpacity(0.2),
@@ -1929,7 +2382,7 @@ class _ColorPickerSheetState extends State<_ColorPickerSheet> {
                         fontFamily: 'monospace',
                         fontSize: 11,
                         fontWeight: FontWeight.w700,
-                        color: _section == _PickerSection.apply
+                        color: _focusedSection == _PickerSection.apply
                             ? ConsoleColors.text
                             : ConsoleColors.text2,
                         letterSpacing: 2,
@@ -1946,7 +2399,7 @@ class _ColorPickerSheetState extends State<_ColorPickerSheet> {
             AnimatedSwitcher(
               duration: const Duration(milliseconds: 160),
               child: SizedBox(
-                key: ValueKey(_section),
+                key: ValueKey((_focusedSection, _sectionActive)),
                 width: double.infinity,
                 child: Wrap(
                   spacing: 10,
@@ -1965,12 +2418,23 @@ class _ColorPickerSheetState extends State<_ColorPickerSheet> {
 // ── Picker section label ──────────────────────────────────────────────────────
 
 class _SectionLabel extends StatelessWidget {
-  const _SectionLabel({required this.label, required this.active});
+  const _SectionLabel({
+    required this.label,
+    required this.focused,
+    required this.active,
+  });
   final String label;
-  final bool active;
+  final bool focused; // D-pad cursor is on this section
+  final bool active; // Section is entered / being controlled
 
   @override
   Widget build(BuildContext context) {
+    final Color labelColor = active
+        ? ConsoleColors.cyan
+        : focused
+        ? ConsoleColors.text2
+        : ConsoleColors.text3;
+
     return Row(
       children: [
         Text(
@@ -1979,7 +2443,7 @@ class _SectionLabel extends StatelessWidget {
             fontFamily: 'monospace',
             fontSize: 7,
             letterSpacing: 2.0,
-            color: active ? ConsoleColors.cyan : ConsoleColors.text3,
+            color: labelColor,
           ),
         ),
         if (active) ...[
@@ -1990,6 +2454,16 @@ class _SectionLabel extends StatelessWidget {
             decoration: const BoxDecoration(
               shape: BoxShape.circle,
               color: ConsoleColors.cyan,
+            ),
+          ),
+        ] else if (focused) ...[
+          const SizedBox(width: 6),
+          Container(
+            width: 5,
+            height: 5,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: Colors.white.withOpacity(0.4),
             ),
           ),
         ],
@@ -2078,7 +2552,6 @@ class _HueBarPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final rect = Offset.zero & size;
-    // Rainbow gradient
     final gradient = LinearGradient(
       colors: List.generate(
         37,
@@ -2089,7 +2562,6 @@ class _HueBarPainter extends CustomPainter {
       RRect.fromRectAndRadius(rect, const Radius.circular(4)),
       Paint()..shader = gradient.createShader(rect),
     );
-    // Thumb
     final tx = hue / 360 * size.width;
     final thumbPaint = Paint()
       ..color = Colors.white
@@ -2103,7 +2575,6 @@ class _HueBarPainter extends CustomPainter {
         ..style = PaintingStyle.stroke
         ..strokeWidth = 1.5,
     );
-    // Show current hue inside thumb
     canvas.drawCircle(
       Offset(tx, size.height / 2),
       5,
@@ -2159,12 +2630,10 @@ class _SatValPainter extends CustomPainter {
     final rect = Offset.zero & size;
     final rrect = RRect.fromRectAndRadius(rect, const Radius.circular(6));
 
-    // Base hue
     canvas.drawRRect(
       rrect,
       Paint()..color = HSVColor.fromAHSV(1, hsv.hue, 1, 1).toColor(),
     );
-    // White gradient (left → transparent)
     canvas.drawRRect(
       rrect,
       Paint()
@@ -2172,7 +2641,6 @@ class _SatValPainter extends CustomPainter {
           colors: [Colors.white, Colors.white.withOpacity(0)],
         ).createShader(rect),
     );
-    // Black gradient (bottom → transparent)
     canvas.drawRRect(
       rrect,
       Paint()
@@ -2183,7 +2651,6 @@ class _SatValPainter extends CustomPainter {
         ).createShader(rect),
     );
 
-    // Crosshair thumb
     final tx = hsv.saturation * size.width;
     final ty = (1 - hsv.value) * size.height;
     final thumbColor = hsv.toColor();
@@ -2493,7 +2960,10 @@ class _ToggleRow extends StatelessWidget {
             ),
           ),
           GestureDetector(
-            onTap: () => onChanged(!value),
+            onTap: () {
+              HapticFeedback.mediumImpact();
+              onChanged(!value);
+            },
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 180),
               width: 46,

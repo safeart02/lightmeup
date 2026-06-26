@@ -95,6 +95,28 @@ class MainActivity : FlutterFragmentActivity() {
         }
     }
 
+    // ── Focus fix ──────────────────────────────────────────────────────────
+override fun onResume() {
+    super.onResume()
+    window.decorView.post {
+        disableFocusHighlight(window.decorView)
+        // Instead of clearing focus, explicitly request it on the FlutterView
+        // so Android considers focus already established on the first button press
+        val flutterView = window.decorView.findViewWithTag<android.view.View>("flutter_view")
+            ?: window.decorView.findViewById<android.view.View>(android.R.id.content)
+        flutterView?.requestFocus()
+    }
+}
+
+private fun disableFocusHighlight(view: android.view.View) {
+    view.defaultFocusHighlightEnabled = false
+    view.clearFocus()
+    if (view is android.view.ViewGroup) {
+        for (i in 0 until view.childCount) {
+            disableFocusHighlight(view.getChildAt(i))
+        }
+    }
+}
     // ── Flutter Engine ─────────────────────────────────────────────────────
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {

@@ -10,6 +10,7 @@ enum LedEffectMode {
   strobe,
   rainbow,
   colorCycle,
+  audioReactive,
 }
 
 extension LedEffectModeLabel on LedEffectMode {
@@ -21,6 +22,7 @@ extension LedEffectModeLabel on LedEffectMode {
     LedEffectMode.strobe => 'Strobe',
     LedEffectMode.rainbow => 'Rainbow',
     LedEffectMode.colorCycle => 'Color Cycle',
+    LedEffectMode.audioReactive => 'Audio Reactive',
   };
 
   String get description => switch (this) {
@@ -31,6 +33,7 @@ extension LedEffectModeLabel on LedEffectMode {
     LedEffectMode.strobe => 'Rapid flash at adjustable speed',
     LedEffectMode.rainbow => 'Cycle through the full color spectrum',
     LedEffectMode.colorCycle => 'Cycle through your chosen colors',
+    LedEffectMode.audioReactive => 'LEDs react to music playing on the device',
   };
 
   String get icon => switch (this) {
@@ -41,16 +44,55 @@ extension LedEffectModeLabel on LedEffectMode {
     LedEffectMode.strobe => '◆',
     LedEffectMode.rainbow => '◈',
     LedEffectMode.colorCycle => '◐',
+    LedEffectMode.audioReactive => '♫',
   };
 }
+
+// ── Audio color sub-modes ──────────────────────────────────────────────────────
+
+/// Controls how color is derived in audioReactive mode.
+enum AudioColorMode {
+  /// Hue tracks frequency band: bass = warm reds, highs = cool blues.
+  spectrum,
+
+  /// Cycles through the user's chosen colorCycle palette; audio drives
+  /// brightness + saturation.
+  colorCycle,
+
+  /// Single fixed hue (primaryColor); audio drives brightness + saturation.
+  singleColor,
+
+  /// User picks a bass color (primaryColor) and a highs color (secondaryColor).
+  splitTheme,
+}
+
+extension AudioColorModeLabel on AudioColorMode {
+  String get label => switch (this) {
+    AudioColorMode.spectrum => 'Spectrum',
+    AudioColorMode.colorCycle => 'Color Cycle',
+    AudioColorMode.singleColor => 'Single Color',
+    AudioColorMode.splitTheme => 'Split Theme',
+  };
+
+  String get description => switch (this) {
+    AudioColorMode.spectrum =>
+      'Hue follows frequency — bass is warm, highs are cool',
+    AudioColorMode.colorCycle => 'Cycles your palette, audio drives intensity',
+    AudioColorMode.singleColor =>
+      'One hue, audio drives brightness and saturation',
+    AudioColorMode.splitTheme => 'Pick a color for bass and another for highs',
+  };
+}
+
+// ── LedEffectConfig ────────────────────────────────────────────────────────────
 
 /// Configuration parameters for all effect modes.
 /// Unused fields are ignored by each mode.
 class LedEffectConfig {
-  /// Solid / breathing / strobe / colorCycle primary color (left stick).
+  /// Solid / breathing / strobe / colorCycle / audioReactive primary color (left stick / bass).
   final Color primaryColor;
 
-  /// Right stick color for splitColor mode.
+  /// Right stick color for splitColor mode, or highs color for audioReactive splitTheme.
   final Color secondaryColor;
 
   /// Speed for animated effects. 0.0 = slowest, 1.0 = fastest.
@@ -59,11 +101,15 @@ class LedEffectConfig {
   /// For strobe: duty cycle (fraction of time the LED is on). 0.1–0.9.
   final double dutyCycle;
 
-  /// Colors to cycle through in colorCycle mode. Min 2, max 8.
+  /// Colors to cycle through in colorCycle mode and audioReactive colorCycle sub-mode.
+  /// Min 2, max 8.
   final List<Color> cycleColors;
 
   /// Whether left and right move in sync or offset for breathing / rainbow.
   final bool mirrorSides;
+
+  /// Sub-mode for audioReactive: how color is derived from audio bands.
+  final AudioColorMode audioColorMode;
 
   const LedEffectConfig({
     this.primaryColor = const Color(0xFF00D4FF),
@@ -77,6 +123,7 @@ class LedEffectConfig {
       Color(0xFFFF4466),
     ],
     this.mirrorSides = true,
+    this.audioColorMode = AudioColorMode.spectrum,
   });
 
   LedEffectConfig copyWith({
@@ -86,6 +133,7 @@ class LedEffectConfig {
     double? dutyCycle,
     List<Color>? cycleColors,
     bool? mirrorSides,
+    AudioColorMode? audioColorMode,
   }) {
     return LedEffectConfig(
       primaryColor: primaryColor ?? this.primaryColor,
@@ -94,6 +142,7 @@ class LedEffectConfig {
       dutyCycle: dutyCycle ?? this.dutyCycle,
       cycleColors: cycleColors ?? this.cycleColors,
       mirrorSides: mirrorSides ?? this.mirrorSides,
+      audioColorMode: audioColorMode ?? this.audioColorMode,
     );
   }
 
@@ -106,6 +155,7 @@ class LedEffectConfig {
     'dutyCycle': dutyCycle,
     'cycleColors': cycleColors.map((c) => c.value).toList(),
     'mirrorSides': mirrorSides,
+    'audioColorMode': audioColorMode.name,
   };
 
   String toJson() => jsonEncode(toMap());
@@ -128,6 +178,7 @@ class LedEffectConfig {
       dutyCycle: (m['dutyCycle'] as num?)?.toDouble() ?? 0.5,
       cycleColors: cycles,
       mirrorSides: m['mirrorSides'] as bool? ?? true,
+      audioColorMode: _parseAudioColorMode(m['audioColorMode'] as String?),
     );
   }
 
@@ -139,9 +190,16 @@ class LedEffectConfig {
     }
   }
 
+  static AudioColorMode _parseAudioColorMode(String? raw) {
+    if (raw == null) return AudioColorMode.spectrum;
+    return AudioColorMode.values.firstWhere(
+      (e) => e.name == raw,
+      orElse: () => AudioColorMode.spectrum,
+    );
+  }
+
   // ── Channel map (sent to Kotlin via MethodChannel) ─────────────────────
 
-  /// Returns a flat Map<String, dynamic> ready to pass over the MethodChannel.
   Map<String, dynamic> toChannelMap(LedEffectMode mode) => {
     'mode': mode.name,
     'primaryColor': primaryColor.value,
@@ -150,5 +208,6 @@ class LedEffectConfig {
     'dutyCycle': dutyCycle,
     'cycleColors': cycleColors.map((c) => c.value).toList(),
     'mirrorSides': mirrorSides,
+    'audioColorMode': audioColorMode.name,
   };
 }
