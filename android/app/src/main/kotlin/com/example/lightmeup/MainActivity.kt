@@ -95,35 +95,43 @@ class MainActivity : FlutterFragmentActivity() {
         }
     }
 
-    // ── Focus fix ──────────────────────────────────────────────────────────
-override fun onResume() {
-    super.onResume()
-    window.decorView.post {
-        disableFocusHighlight(window.decorView)
-        // Instead of clearing focus, explicitly request it on the FlutterView
-        // so Android considers focus already established on the first button press
-        val flutterView = window.decorView.findViewWithTag<android.view.View>("flutter_view")
-            ?: window.decorView.findViewById<android.view.View>(android.R.id.content)
-        flutterView?.requestFocus()
-    }
-}
+    // ── Lifecycle ──────────────────────────────────────────────────────────
 
-private fun disableFocusHighlight(view: android.view.View) {
-    view.defaultFocusHighlightEnabled = false
-    view.clearFocus()
-    if (view is android.view.ViewGroup) {
-        for (i in 0 until view.childCount) {
-            disableFocusHighlight(view.getChildAt(i))
+    override fun onCreate(savedInstanceState: android.os.Bundle?) {
+        super.onCreate(savedInstanceState)
+        // Initialize here, not in configureFlutterEngine, so it's always ready
+        // before any launcher callback or method channel call can fire.
+        projectionManager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+    }
+
+    // ── Focus fix ──────────────────────────────────────────────────────────
+
+    override fun onResume() {
+        super.onResume()
+        window.decorView.post {
+            disableFocusHighlight(window.decorView)
+            val flutterView = window.decorView.findViewWithTag<android.view.View>("flutter_view")
+                ?: window.decorView.findViewById<android.view.View>(android.R.id.content)
+            flutterView?.requestFocus()
         }
     }
-}
+
+    private fun disableFocusHighlight(view: android.view.View) {
+        view.defaultFocusHighlightEnabled = false
+        view.clearFocus()
+        if (view is android.view.ViewGroup) {
+            for (i in 0 until view.childCount) {
+                disableFocusHighlight(view.getChildAt(i))
+            }
+        }
+    }
+
     // ── Flutter Engine ─────────────────────────────────────────────────────
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
         pendingResult = null
-        projectionManager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
 
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, METHOD_CHANNEL)
             .setMethodCallHandler { call, result ->
@@ -184,6 +192,11 @@ private fun disableFocusHighlight(view: android.view.View) {
                     }
 
                     "isRunning" -> result.success(LightmeupService.isRunning)
+
+                    "requestAddTile" -> {
+                        LightmeupQSTile.requestTileAdd(this)
+                        result.success(null)
+                    }
 
                     else -> result.notImplemented()
                 }

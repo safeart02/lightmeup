@@ -90,6 +90,16 @@ class LightmeupChannel {
   }
 
   /// Push a live effect change to the running service without restarting.
+  /// Ask the system to show the "Add Quick Settings tile?" dialog.
+  /// Only does anything on Android 13+; safe to call on older versions.
+  Future<void> requestAddTile() async {
+    try {
+      await _methodChannel.invokeMethod('requestAddTile');
+    } on PlatformException catch (e) {
+      debugPrint('requestAddTile error: ${e.message}');
+    }
+  }
+
   Future<void> updateEffect(LedEffectMode mode, LedEffectConfig config) async {
     try {
       debugPrint('[LightmeupChannel] updateEffect: ${mode.name}');

@@ -62,7 +62,6 @@ class LightmeupService : Service() {
         const val AUDIO_COLOR_SPLIT_THEME = "splitTheme"
 
         @Volatile var isRunning = false
-            private set
 
         @Volatile var instance: LightmeupService? = null
             private set
@@ -178,26 +177,37 @@ class LightmeupService : Service() {
         effectStartMs   = SystemClock.elapsedRealtime()
         ColorSampler.reset()
 
+        isRunning = true  // Set early so REFRESH_TILE broadcast sees it immediately
+        Log.i(TAG, "Service running, mode=$effectMode")
+
         startCapture(resultCode, data)
 
         if (effectMode != MODE_AMBIENT_SYNC) {
             startEffectLoop()
         }
 
-        isRunning = true
-        Log.i(TAG, "Service running, mode=$effectMode")
         return START_STICKY
     }
 
     override fun onDestroy() {
         Log.i(TAG, "onDestroy")
-        captureHandler.removeCallbacks(effectRunnable)
-        audioSampler.stop()
-        stopCapture()
-        ledController.restore()
-        pushColors(Color.BLACK, Color.BLACK)
+        // Mark stopped and clear instance immediately so the tile and any
+        // callers see the new state before the slow cleanup begins.
         isRunning = false
         instance  = null
+        captureHandler.removeCallbacks(effectRunnable)
+
+        // All remaining work is slow (shell spawns, thread joins, IPC) — run
+        // it on a background thread so onDestroy returns instantly and the
+        // main thread is free to redraw the tile right away.
+        Thread({
+            audioSampler.stop()   // joins audio thread up to 500 ms
+            stopCapture()         // quitSafely + mediaProjection.stop()
+            ledController.restore() // multiple runShell() + waitFor() calls
+            pushColors(Color.BLACK, Color.BLACK)
+            Log.i(TAG, "onDestroy cleanup complete")
+        }, "LightMeUpShutdown").also { it.isDaemon = true; it.start() }
+
         super.onDestroy()
     }
 
@@ -564,11 +574,13 @@ class LightmeupService : Service() {
     // ── EventChannel push ──────────────────────────────────────────────────
 
     private fun pushColors(left: Int, right: Int) {
-        val sink = colorSink ?: return
+        if (colorSink == null) return
         val fl = (left  and 0x00FFFFFF) or 0xFF000000.toInt()
         val fr = (right and 0x00FFFFFF) or 0xFF000000.toInt()
         mainHandler.post {
-            sink.success(mapOf("left" to fl, "right" to fr))
+            // Re-check inside the post: the sink may have detached while this
+            // runnable was queued, which is what causes FlutterJNI warnings.
+            colorSink?.success(mapOf("left" to fl, "right" to fr))
         }
     }
 
@@ -580,7 +592,7 @@ class LightmeupService : Service() {
         virtualDisplay  = null
         imageReader     = null
         mediaProjection = null
-        captureThread.quitSafely()
+        captureThread.quit()
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────

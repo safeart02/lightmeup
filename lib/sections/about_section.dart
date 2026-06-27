@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../screens/home_screen.dart';
 import '../widgets/bottom_bar.dart';
 import '../../services/app_state.dart';
+import '../services/lightmeup_channel.dart';
 
 class AboutSection extends StatelessWidget {
   const AboutSection({super.key, required this.state});
@@ -72,6 +73,39 @@ class AboutSection extends StatelessWidget {
                       ),
                     ],
                   ),
+
+                  const SizedBox(height: 20),
+
+                  // Quick Settings tile row
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: const [
+                          Text(
+                            'QUICK SETTINGS TILE',
+                            style: TextStyle(
+                              fontFamily: 'monospace',
+                              fontSize: 7,
+                              letterSpacing: 2.0,
+                              color: ConsoleColors.text3,
+                            ),
+                          ),
+                          SizedBox(height: 3),
+                          Text(
+                            'Start/stop from notification panel',
+                            style: TextStyle(
+                              fontFamily: 'monospace',
+                              fontSize: 11,
+                              color: ConsoleColors.text2,
+                            ),
+                          ),
+                        ],
+                      ),
+                      _AddTileButton(),
+                    ],
+                  ),
                 ],
               ),
             ),
@@ -126,6 +160,51 @@ class _InfoChip extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+// ── Add Tile button ────────────────────────────────────────────────────────────
+
+class _AddTileButton extends StatefulWidget {
+  const _AddTileButton();
+
+  @override
+  State<_AddTileButton> createState() => _AddTileButtonState();
+}
+
+class _AddTileButtonState extends State<_AddTileButton> {
+  bool _requested = false;
+
+  Future<void> _onPressed() async {
+    await LightmeupChannel().requestAddTile();
+    setState(() => _requested = true);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: _requested ? null : _onPressed,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        decoration: BoxDecoration(
+          color: _requested ? ConsoleColors.panel2 : ConsoleColors.cyanDim,
+          border: Border.all(
+            color: _requested ? ConsoleColors.border2 : ConsoleColors.cyan,
+          ),
+          borderRadius: BorderRadius.circular(4),
+        ),
+        child: Text(
+          _requested ? 'REQUESTED' : 'ADD TILE',
+          style: TextStyle(
+            fontFamily: 'monospace',
+            fontSize: 11,
+            letterSpacing: 1.2,
+            fontWeight: FontWeight.w600,
+            color: _requested ? ConsoleColors.text3 : ConsoleColors.cyan,
+          ),
+        ),
       ),
     );
   }

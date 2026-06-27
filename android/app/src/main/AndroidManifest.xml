@@ -41,10 +41,45 @@
             </intent-filter>
         </activity>
 
+        <!-- Ambient LED foreground service -->
         <service
             android:name=".LightmeupService"
             android:foregroundServiceType="mediaProjection"
             android:exported="false" />
+
+        <!--
+            Quick Settings tile.
+
+            android:exported="true"  — required so the system can bind to it.
+            android:permission       — locks binding to the system tile manager only.
+            The label / icon shown in the QS panel come from the <intent-filter>
+            and from LightmeupTileService.requestTileAdd() at runtime.
+        -->
+        <service
+            android:name=".LightmeupQSTile"
+            android:exported="true"
+            android:label="LightMeUp"
+            android:icon="@mipmap/ic_launcher"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+
+        <!--
+            Lightweight transparent activity that handles the tile's
+            WRITE_SETTINGS → MediaProjection permission flow.
+            Translucent theme means the screen behind stays fully visible.
+            Excluded from recents so it never appears in the task switcher.
+            Separate taskAffinity keeps it off MainActivity's back stack.
+        -->
+        <activity
+            android:name=".TilePermissionActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:launchMode="singleTop"
+            android:excludeFromRecents="true"
+            android:taskAffinity=".tile" />
 
         <!-- Required by Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data
